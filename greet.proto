@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package e_client;
+
+service EmailClientService {
+
+
+}
