@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
 from IMAPClient import IMAPClient  # Используем существующий IMAPClient
@@ -44,6 +44,12 @@ class FetchEmailInfoResponse(BaseModel):
     body: str
     attachments: List[str]
 
+class SaveAttachmentsRequest(BaseModel):
+    save_path: str
+
+class SaveAttachmentsResponse(BaseModel):
+    message: str
+
 
 # API для получения списка писем
 @app.get("/emails/", response_model=FetchEmailsResponse)
@@ -76,6 +82,28 @@ async def fetch_email_info(email_id: int):
         attachments=[att["filename"] for att in email_info["attachments"]]
     )
 
+def is_valid_path(path: str) -> bool:
+    try:
+        import os
+
+        os.makedirs(path, exist_ok=True)
+        return os.access(path, os.W_OK)
+    except Exception:
+        return False
+
+# API для сохранения файла выбранного письма
+@app.post("/emails/save_attachments", response_model=SaveAttachmentsResponse)
+async def save_email_attachments(request: SaveAttachmentsRequest):
+    try:
+        save_path = request.save_path
+        if not is_valid_path(save_path):
+            raise ValueError("Invalid or inaccessible save path.")
+
+        # Сохраняем вложения
+        imapClient.save_attachment(save_path)
+        return SaveAttachmentsResponse(message=f"Attachments saved to {save_path}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # Остановка IMAP-клиента при завершении работы сервера
 @app.on_event("shutdown")
