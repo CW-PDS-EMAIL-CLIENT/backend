@@ -1,6 +1,7 @@
 import imaplib
 import email as em
 from email.header import decode_header
+import os
 
 class IMAPClient:
     def __init__(self, imap_server, email_user, email_pass, port=993, timeout=5):
@@ -10,6 +11,7 @@ class IMAPClient:
         self.port = port
         self.timeout = timeout
         self.mail = None
+        self.selected_email = None  # Переменная для хранения выбранного письма
 
     def open_connect(self):
         """Открывает соединение с почтовым сервером."""
@@ -102,7 +104,7 @@ class IMAPClient:
                 if filename:
                     file_data = part.get_payload(decode=True)
                     attachments.append({
-                        "filename": filename,
+                        "filename": self.decode_mime_words(filename),
                         "content": file_data
                     })
         return attachments
@@ -115,6 +117,8 @@ class IMAPClient:
             return None
 
         msg = em.message_from_bytes(msg_data[0][1])
+
+        self.selected_email = msg
 
         subject = self.decode_mime_words(msg["Subject"])
         from_ = self.decode_mime_words(msg["From"])
@@ -142,6 +146,30 @@ class IMAPClient:
         else:
             return msg.get_payload(decode=True).decode(msg.get_content_charset() or 'utf-8')
 
+    def save_attachment(self, save_path):
+        """Сохраняет вложения выбранного письма по указанному пути."""
+        if not self.selected_email:
+            raise ValueError("Письмо не выбрано. Сначала выберите письмо с помощью fetch_email_info().")
+
+        # Извлекаем вложения из выбранного письма
+        attachments = self.get_attachments(self.selected_email)
+        if not attachments:
+            print("У выбранного письма нет вложений.")
+            return
+
+        # Создаем папку, если она не существует
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+
+        for attachment in attachments:
+            filename = attachment["filename"]
+            content = attachment["content"]  # Байты данных вложения
+            file_path = os.path.join(save_path, filename)
+
+            with open(file_path, "wb") as file:
+                file.write(content)  # Сохраняем байты данных в файл
+            print(f"Вложение сохранено: {file_path}")
+
 if __name__ == '__main__':
     imap_server = "imap.mail.ru"
     email_user = "donntu_test@mail.ru"
@@ -153,23 +181,29 @@ if __name__ == '__main__':
     # Открываем соединение
     client.open_connect()
 
-    # Получаем и выводим письма
-    emails = client.fetch_emails(start=2, limit=2)
-    for email in emails:
-        print("ID: ", email["id"])
-        print("Sender:", email["sender"])
-        print("Subject:", email["subject"])
-        print("Date:", email["date"])
-        print("-" * 50)
+    # # Получаем и выводим письма
+    # emails = client.fetch_emails(start=2, limit=2)
+    # for email in emails:
+    #     print("ID: ", email["id"])
+    #     print("Sender:", email["sender"])
+    #     print("Subject:", email["subject"])
+    #     print("Date:", email["date"])
+    #     print("-" * 50)
 
     # Показываем информацию о конкретном письме (например, о письме с ID 3)
-    email_id = b'8'  # Замените на нужный ID письма
+    email_id = b'11'  # Замените на нужный ID письма
     email_info = client.fetch_email_info(email_id)
     if email_info:
         print("Full information about the email:")
         for key, value in email_info.items():
             print(f"{key}: {value}")
         print("-" * 50)
+
+        # Сохраняем вложения письма в указанную папку
+        try:
+            client.save_attachment(r"C:\Users\User\Pictures\Attachments")
+        except ValueError as e:
+            print(e)
 
     # Закрываем соединение
     client.close_connect()

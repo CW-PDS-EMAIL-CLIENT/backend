@@ -47,7 +47,7 @@ class FetchEmailInfoResponse(BaseModel):
 
 # API для получения списка писем
 @app.get("/emails/", response_model=FetchEmailsResponse)
-async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = 10):
+async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
     emails = imapClient.fetch_emails(offset, limit)
     emails_list = [
         SummaryEmailResponse(
