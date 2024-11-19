@@ -87,12 +87,15 @@ if __name__ == '__main__':
             attachment_content = file.read()
 
         client.send_email(
-            to_email="sashaboriskina7@gmail.com",
+            to_email="20egorka03@gmail.com",
             subject="Тестовое письмо",
             body="Это тестовое письмо, отправленное через SMTP.",
             from_name="Тест Отправитель",
             to_name="Тест Получатель",
             attachments=[
+                {"filename": file.name, "content": attachment_content},
+                {"filename": file.name, "content": attachment_content},
+                {"filename": file.name, "content": attachment_content},
                 {"filename": file.name, "content": attachment_content}
             ]
         )
