@@ -1,7 +1,8 @@
 import mimetypes
 import os.path
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Form, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
 from IMAPClient import IMAPClient  # Используем существующий IMAPClient
@@ -10,7 +11,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from SMTPClient import SMTPClient
 from gRPC_client import SecureEmailClient
 
-app = FastAPI()
+# Использование lifespan для событий старта и остановки
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Инициализация при старте
+    print("Приложение запущено!")
+    yield
+    # Очистка при завершении
+    # Остановка IMAP-клиента при завершении работы сервера
+    imapClient.close_connect()
+    print("Приложение завершено!")
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Инициализация gRPC клиента
 grpc_client = SecureEmailClient()
@@ -74,15 +87,10 @@ class SendEmailRequest(BaseModel):
     body: str
     from_name: Optional[str] = None
     to_name: Optional[str] = None
-    attachments: Optional[List[dict]] = None  # [{"filename": str, "content": bytes} or {"path": str}]
+    attachments: Optional[List[UploadFile]] = None  # Используем UploadFile для загрузки файлов
 
 class SendEmailResponse(BaseModel):
     message: str
-
-# Предварительная инициализация
-@app.on_event("startup")
-async def startup_event():
-    print("Приложение запущено!")
 
 # API для получения списка писем
 @app.get("/emails/", response_model=FetchEmailsResponse)
@@ -164,44 +172,35 @@ def read_file(file_path: str):
 
 # API для отправки письма на указанную почту
 @app.post("/emails/send", response_model=SendEmailResponse)
-async def send_email(request: SendEmailRequest):
+async def send_email(
+    to_email: str = Form(...),
+    subject: str = Form(...),
+    body: str = Form(...),
+    from_name: Optional[str] = Form(None),
+    to_name: Optional[str] = Form(None),
+    attachments: Optional[List[UploadFile]] = File(None)
+):
     try:
-        smtpClient.open_connect()  # Открываем соединение
+        smtpClient.open_connect()
 
+        # Обработка файлов вложений
         file_attachments = []
+        if attachments:
+            for file in attachments:
+                content = await file.read()
+                file_attachments.append({"filename": file.filename, "content": content})
 
-        # Обработка вложений
-        if request.attachments:
-            for attachment in request.attachments:
-                if "path" in attachment:  # Если указан путь к файлу
-                    file_path = attachment["path"]
-                    if os.path.exists(file_path):
-                        with open(file_path, "rb") as file:
-                            file_attachments.append({
-                                "filename": os.path.basename(file_path),
-                                "content": file.read()
-                            })
-                elif "filename" in attachment and "content" in attachment:  # Если переданы данные файла
-                    file_attachments.append({
-                        "filename": attachment["filename"],
-                        "content": attachment["content"].encode("utf-8")  # Кодируем строку в байты
-                    })
-
+        # Отправка письма через SMTP-клиент
         smtpClient.send_email(
-            to_email=request.to_email,
-            subject=request.subject,
-            body=request.body,
-            from_name=request.from_name,
-            to_name=request.to_name,
-            attachments=file_attachments  # Передаем собранные вложения
+            to_email=to_email,
+            subject=subject,
+            body=body,
+            from_name=from_name,
+            to_name=to_name,
+            attachments=file_attachments,
         )
-        smtpClient.close_connect()  # Закрываем соединение
+        smtpClient.close_connect()
         return SendEmailResponse(message="Email successfully sent.")
     except Exception as e:
-        smtpClient.close_connect()  # Закрываем соединение в случае ошибки
+        smtpClient.close_connect()
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
-
-# Остановка IMAP-клиента при завершении работы сервера
-@app.on_event("shutdown")
-def shutdown_event():
-    imapClient.close_connect()
