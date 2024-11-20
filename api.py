@@ -1,3 +1,6 @@
+import mimetypes
+import os.path
+
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
@@ -71,7 +74,7 @@ class SendEmailRequest(BaseModel):
     body: str
     from_name: Optional[str] = None
     to_name: Optional[str] = None
-    attachments: Optional[List[dict]] = None  # [{"filename": str, "content": bytes}]
+    attachments: Optional[List[dict]] = None  # [{"filename": str, "content": bytes} or {"path": str}]
 
 class SendEmailResponse(BaseModel):
     message: str
@@ -134,21 +137,66 @@ async def save_email_attachments(request: SaveAttachmentsRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+def read_file(file_path: str):
+    """
+    Читает содержимое файла в зависимости от его типа.
+
+    :param file_path: Путь к файлу.
+    :return: Кортеж (содержимое файла, MIME-тип).
+    """
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if mime_type is None:
+        mime_type = "application/octet-stream"  # Если тип не удалось определить
+
+    try:
+        if mime_type.startswith("text/"):
+            # Если файл текстовый
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            # Если файл бинарный
+            with open(file_path, "rb") as f:
+                content = f.read()
+    except Exception as e:
+        raise ValueError(f"Failed to read file {file_path}: {e}")
+
+    return content, mime_type
+
 # API для отправки письма на указанную почту
 @app.post("/emails/send", response_model=SendEmailResponse)
 async def send_email(request: SendEmailRequest):
     try:
         smtpClient.open_connect()  # Открываем соединение
+
+        file_attachments = []
+
+        # Обработка вложений
+        if request.attachments:
+            for attachment in request.attachments:
+                if "path" in attachment:  # Если указан путь к файлу
+                    file_path = attachment["path"]
+                    if os.path.exists(file_path):
+                        with open(file_path, "rb") as file:
+                            file_attachments.append({
+                                "filename": os.path.basename(file_path),
+                                "content": file.read()
+                            })
+                elif "filename" in attachment and "content" in attachment:  # Если переданы данные файла
+                    file_attachments.append({
+                        "filename": attachment["filename"],
+                        "content": attachment["content"].encode("utf-8")  # Кодируем строку в байты
+                    })
+
         smtpClient.send_email(
             to_email=request.to_email,
             subject=request.subject,
             body=request.body,
             from_name=request.from_name,
             to_name=request.to_name,
-            attachments=request.attachments or []  # Если None, передаем пустой список
+            attachments=file_attachments  # Передаем собранные вложения
         )
         smtpClient.close_connect()  # Закрываем соединение
-        return SendEmailResponse(message="Email successfully send.")
+        return SendEmailResponse(message="Email successfully sent.")
     except Exception as e:
         smtpClient.close_connect()  # Закрываем соединение в случае ошибки
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
