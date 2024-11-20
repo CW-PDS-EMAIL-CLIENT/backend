@@ -4,6 +4,7 @@ from typing import List, Optional
 from IMAPClient import IMAPClient  # Используем существующий IMAPClient
 from fastapi.middleware.cors import CORSMiddleware
 
+from SMTPClient import SMTPClient
 from gRPC_client import SecureEmailClient
 
 app = FastAPI()
@@ -27,6 +28,13 @@ email_pass = "wrixCgaMYsqXWmVbBPS7"
 
 imapClient = IMAPClient(imap_server, email_user, email_pass)
 imapClient.open_connect()
+
+# Инициализация SMTP-клиента
+smtp_server = "smtp.mail.ru"
+smtp_email_user = "donntu_test@mail.ru"
+smtp_email_pass = "wrixCgaMYsqXWmVbBPS7"
+
+smtpClient = SMTPClient(smtp_server, smtp_email_user, smtp_email_pass)
 
 use_encrypt = True
 
@@ -56,6 +64,18 @@ class SaveAttachmentsRequest(BaseModel):
 class SaveAttachmentsResponse(BaseModel):
     message: str
 
+# API для отправки писем
+class SendEmailRequest(BaseModel):
+    to_email: str
+    subject: str
+    body: str
+    from_name: Optional[str] = None
+    to_name: Optional[str] = None
+    attachments: Optional[List[dict]] = None  # [{"filename": str, "content": bytes}]
+
+class SendEmailResponse(BaseModel):
+    message: str
+
 # Предварительная инициализация
 @app.on_event("startup")
 async def startup_event():
@@ -74,7 +94,6 @@ async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
         ) for email in emails
     ]
     return FetchEmailsResponse(emailsList=emails_list)
-
 
 # API для получения информации о конкретном письме
 @app.get("/emails/{email_id}", response_model=FetchEmailInfoResponse)
@@ -114,6 +133,25 @@ async def save_email_attachments(request: SaveAttachmentsRequest):
         return SaveAttachmentsResponse(message=f"Attachments saved to {save_path}")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+# API для отправки письма на указанную почту
+@app.post("/emails/send", response_model=SendEmailResponse)
+async def send_email(request: SendEmailRequest):
+    try:
+        smtpClient.open_connect()  # Открываем соединение
+        smtpClient.send_email(
+            to_email=request.to_email,
+            subject=request.subject,
+            body=request.body,
+            from_name=request.from_name,
+            to_name=request.to_name,
+            attachments=request.attachments or []  # Если None, передаем пустой список
+        )
+        smtpClient.close_connect()  # Закрываем соединение
+        return SendEmailResponse(message="Email successfully send.")
+    except Exception as e:
+        smtpClient.close_connect()  # Закрываем соединение в случае ошибки
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
 
 # Остановка IMAP-клиента при завершении работы сервера
 @app.on_event("shutdown")
