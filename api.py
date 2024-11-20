@@ -4,7 +4,12 @@ from typing import List, Optional
 from IMAPClient import IMAPClient  # Используем существующий IMAPClient
 from fastapi.middleware.cors import CORSMiddleware
 
+from gRPC_client import SecureEmailClient
+
 app = FastAPI()
+
+# Инициализация gRPC клиента
+grpc_client = SecureEmailClient()
 
 # Настройка CORS
 app.add_middleware(
@@ -23,6 +28,7 @@ email_pass = "wrixCgaMYsqXWmVbBPS7"
 imapClient = IMAPClient(imap_server, email_user, email_pass)
 imapClient.open_connect()
 
+use_encrypt = True
 
 # Определение моделей данных
 class SummaryEmailResponse(BaseModel):
@@ -50,6 +56,10 @@ class SaveAttachmentsRequest(BaseModel):
 class SaveAttachmentsResponse(BaseModel):
     message: str
 
+# Предварительная инициализация
+@app.on_event("startup")
+async def startup_event():
+    print("Приложение запущено!")
 
 # API для получения списка писем
 @app.get("/emails/", response_model=FetchEmailsResponse)

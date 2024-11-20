@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package secureemail;
+
+message Email {
+    bytes email_body = 1;               // Тело письма
+    repeated Attachment attachments = 2; // Список вложений
+}
+
+message Attachment {
+    string filename = 1;  // Имя файла
+    bytes content = 2;    // Содержимое файла
+}
+
+message EncryptedEmail {
+    bytes iv = 1;                // Инициализационный вектор
+    bytes encrypted_des_key = 2; // Зашифрованный DES-ключ
+    bytes signature = 3;         // Цифровая подпись
+    bytes encrypted_content = 4; // Зашифрованное тело письма
+    repeated EncryptedAttachment encrypted_attachments = 5; // Зашифрованные вложения
+}
+
+message EncryptedAttachment {
+    string filename = 1;  // Имя файла
+    bytes content = 2;    // Зашифрованное содержимое
+}
+
+message ProcessEmailRequest {
+    Email email = 1;                     // Письмо
+    bytes private_key_sign = 2;          // Приватный ключ для подписи
+    bytes public_key_encrypt = 3;        // Публичный ключ для шифрования
+}
+
+message VerifyEmailRequest {
+    EncryptedEmail encrypted_email = 1;  // Зашифрованное письмо
+    bytes private_key_encrypt = 2;       // Приватный ключ для расшифровки
+    bytes public_key_sign = 3;           // Публичный ключ для проверки подписи
+}
+
+// Сообщение для ответа с публичными и приватными ключами
+message KeyGenerationResponse {
+    bytes private_key_sign = 1; // Приватный ключ для подписи
+    bytes public_key_sign = 2;  // Публичный ключ для подписи
+    bytes private_key_encrypt = 3; // Приватный ключ для шифрования
+    bytes public_key_encrypt = 4;  // Публичный ключ для шифрования
+}
+
+message EmptyRequest {}
+
+service SecureEmailService {
+    rpc GenerateKeys(EmptyRequest) returns (KeyGenerationResponse);
+    rpc ProcessEmail(ProcessEmailRequest) returns (EncryptedEmail);
+    rpc VerifyEmail(VerifyEmailRequest) returns (Email);
+}
