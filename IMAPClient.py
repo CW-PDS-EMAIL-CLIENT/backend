@@ -111,30 +111,41 @@ class IMAPClient:
 
     def fetch_email_info(self, email_id):
         """Получает полную информацию о письме по его ID, включая вложения."""
-        status, msg_data = self.mail.fetch(email_id, "(RFC822)")
-        if status != "OK":
-            print(f"Ошибка при получении письма с ID {email_id}")
+        try:
+            # Проверяем состояние соединения
+            if not self.mail.state == 'SELECTED':
+                print("Reconnecting to IMAP server...")
+                self.open_connect()
+
+            status, msg_data = self.mail.fetch(email_id, "(RFC822)")
+
+            # Проверка статуса и содержимого ответа
+            if status != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+                print(f"Письмо с ID {email_id} не найдено или недоступно.")
+                return None
+
+            # Если данные валидны, разбираем письмо
+            msg = em.message_from_bytes(msg_data[0][1])
+            self.selected_email = msg
+
+            subject = self.decode_mime_words(msg["Subject"])
+            from_ = self.decode_mime_words(msg["From"])
+            to_ = self.decode_mime_words(msg["To"])
+            date = msg.get("Date")
+            body = self.get_body(msg)
+            attachments = self.get_attachments(msg)
+
+            return {
+                "subject": subject,
+                "sender": from_,
+                "to": to_,
+                "date": date,
+                "body": body,
+                "attachments": attachments
+            }
+        except Exception as e:
+            print(f"Ошибка при обработке письма с ID {email_id}: {e}")
             return None
-
-        msg = em.message_from_bytes(msg_data[0][1])
-
-        self.selected_email = msg
-
-        subject = self.decode_mime_words(msg["Subject"])
-        from_ = self.decode_mime_words(msg["From"])
-        to_ = self.decode_mime_words(msg["To"])
-        date = msg.get("Date")
-        body = self.get_body(msg)
-        attachments = self.get_attachments(msg)
-
-        return {
-            "subject": subject,
-            "sender": from_,
-            "to": to_,
-            "date": date,
-            "body": body,
-            "attachments": attachments
-        }
 
     def get_body(self, msg):
         """Извлекает тело письма."""
