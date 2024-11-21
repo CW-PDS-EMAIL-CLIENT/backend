@@ -1,7 +1,11 @@
 import mimetypes
 import os.path
+import json
 from contextlib import asynccontextmanager
 
+import base64
+
+import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Form, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
@@ -9,7 +13,7 @@ from IMAPClient import IMAPClient  # Используем существующи
 from fastapi.middleware.cors import CORSMiddleware
 
 from SMTPClient import SMTPClient
-from gRPC_client import SecureEmailClient
+from SecureEmailClient import SecureEmailClient
 
 # Использование lifespan для событий старта и остановки
 @asynccontextmanager
@@ -26,7 +30,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # Инициализация gRPC клиента
-grpc_client = SecureEmailClient()
+secure_email_client = SecureEmailClient()
 
 # Настройка CORS
 app.add_middleware(
@@ -39,20 +43,18 @@ app.add_middleware(
 
 # Инициализация IMAP-клиента
 imap_server = "imap.mail.ru"
-email_user = "donntu_test@mail.ru"
-email_pass = "wrixCgaMYsqXWmVbBPS7"
+email_user = "donntu_test@mail.ru"  # modex.modex@mail.ru   #   donntu_test@mail.ru
+email_pass = "wrixCgaMYsqXWmVbBPS7" # MsJE9vLGRFkDV6ECMLdF  #   wrixCgaMYsqXWmVbBPS7
 
 imapClient = IMAPClient(imap_server, email_user, email_pass)
 imapClient.open_connect()
 
 # Инициализация SMTP-клиента
 smtp_server = "smtp.mail.ru"
-smtp_email_user = "donntu_test@mail.ru"
-smtp_email_pass = "wrixCgaMYsqXWmVbBPS7"
+smtp_email_user = "modex.modex@mail.ru"
+smtp_email_pass = "wqCgQPseQDsBZCk9Zd03"
 
 smtpClient = SMTPClient(smtp_server, smtp_email_user, smtp_email_pass)
-
-use_encrypt = True
 
 # Определение моделей данных
 class SummaryEmailResponse(BaseModel):
@@ -72,7 +74,7 @@ class FetchEmailInfoResponse(BaseModel):
     subject: str
     date: str
     body: str
-    attachments: List[str]
+    attachments: Optional[List[File]] = None
 
 class SaveAttachmentsRequest(BaseModel):
     save_path: str
@@ -81,6 +83,7 @@ class SaveAttachmentsResponse(BaseModel):
     message: str
 
 # API для отправки писем
+# Модели данных
 class SendEmailRequest(BaseModel):
     to_email: str
     subject: str
@@ -88,6 +91,9 @@ class SendEmailRequest(BaseModel):
     from_name: Optional[str] = None
     to_name: Optional[str] = None
     attachments: Optional[List[UploadFile]] = None  # Используем UploadFile для загрузки файлов
+    private_key_sign: Optional[str] = None
+    public_key_encrypt: Optional[str] = None  # Ключи для шифрования
+
 
 class SendEmailResponse(BaseModel):
     message: str
@@ -109,18 +115,96 @@ async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
 # API для получения информации о конкретном письме
 @app.get("/emails/{email_id}", response_model=FetchEmailInfoResponse)
 async def fetch_email_info(email_id: int):
-    email_info = imapClient.fetch_email_info(str(email_id).encode())
-    if not email_info:
-        raise HTTPException(status_code=404, detail="Email not found")
+    """
+    API для получения информации о письме с декодированием Base64 и автоматическим дешифрованием.
 
-    return FetchEmailInfoResponse(
-        sender=email_info["sender"],
-        to=email_info["to"],
-        subject=email_info["subject"],
-        date=email_info["date"],
-        body=email_info["body"],
-        attachments=[att["filename"] for att in email_info["attachments"]]
-    )
+    Args:
+        email_id (int): ID письма.
+
+    Returns:
+        FetchEmailInfoResponse: Информация о письме.
+
+    Raises:
+        HTTPException: Ошибка, если письмо не найдено или ключи не подошли.
+    """
+    # Локальный массив ключей
+    decryption_keys = [
+        {
+            "private_key_encrypt": "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBbENaK3dJY3I1ZW44K2UxSU80NzhMQVVsVEc1VmdwNFIvQ2ltWUtCUkl6K1RsTXhOCjNPYU9xNFIxQUJRTWNwNEdEbUVLMXFzdGh4WllPVFIrdC9GU0s5VHYyQVVTSDliL1c5Ui95WmR0QTlrdisvVFMKM3hEd3daMDBMOXJzajQ0Sm52R1l6WlpVeDBod29WSXZXVVFwWU01ZTE5UFo3QnpsOTF3MC9RaGtHVkZaVVhXZApSUmFBQ3hjQTEwWG1uYTR0NHVuYzlvMzdFWE81OFBjb1h1M1pYSGZWRnRTRTZvQzFaNFlLZkxXYnBnRWYza0pBCjk2dVMxQk1OMkdrV1FWUytlR1ROdEl5aHdHei9KY0M4VndYcURLUjRMSDRDY28vSk93WlVFV1d1bDhhSGJZdm0Kb0ZIb0ZMM0JtcUNEZzYxa0JQOTBLcFpNdjRxanBVdFRoSjhWZHdJREFRQUJBb0lCQUR6SXdvNnBweGd3OWN0eApVSWFuTnMyMDJzWE9LeVZwUjRYSEErUjNRbk1NM2JkYVQ4UUhrSmZNdzloaFlXNFJhZml5VmlrWG1KbHBVSTgvCis1SHE0RVQ5bTk1c3ppL2tIV2VHKzFzeDF0ZVNYNzZuaDNGZ1dQZUhVV2NsRXBRZnVkRE4zVnpVaGpveGZZeWkKMUt4eWErdTlJR3E3RUJseERlVjhubjBHMlZNTlRxS0NlSk84Y0JyNm9VZmxMYzB0K2Jnamhad2JGVE54NVlGSApMc1hhR1lVNFBWTlhKNFp2cFdOZ3oxdGV3K3BZdUhEWVFMQW5hUTRPUWhmdmFWMVN0bkxaK0dOWTdna2Z6NzZqCkJPZmV1azBMd2UrRndHeFZ4bUlUSjdLaC9lZUYydThYNFh2TVVqOEFSYXV5SmhHbVZ5T0t2N1lBTW9EamhQSkcKalloR2VPa0NnWUVBd2toZUd3aS8vUEpwaVoxcXhKYzVYY2pnamlwYzBidUxjQ2cvNkM2MmxJWWFzUGpMT05CZQpDUHFYWUNoS0RhSVU3b3ZwdFEwRHBrYXA2UXB0VU5jY2pSQXFGV2d1QWxZRHg3SDdTWHJqRVE4dVh4LzFHNDdxCis0Tk1mRXRQR2htSnpPMStuNTFLWlNKNlZkbUZZTmM1Y3kyT2t3c1gxeERSdTA4dnlFVG1oUXNDZ1lFQXd6YUQKZ29Uem1wYmR6eGlwcURsNFRHUndEb2NIRTlCZXhkaDV0WDNaSjJ6VWZJVXlmQmwxTmFDQTdIVlNmbWFER3liNwpmS2EwMG82QXF2VTJrVklURUpNZHBFT1BYVm4vdUVmd3luZy96c2JQK1FKb1ppYUxGT0JSRnZIejRiMFE2M2NhCnI3dHlGYjNpcjF4TnFlTXUzSFdEVEtSTVNtMzBDcTNmbXB0NG5NVUNnWUJSalhzak1mc1ZQTlNjVlozWncvanEKcTBYSHAzU3EvV1M4d2NpQnVBb2dNbUxGNHNtN29ZdTNqU2s1emUrMzVVK1FDdDhoaHNML2F5NHJpcHIwa2plRAo1ME1qRlVZcTZOeFJXUjY0YTRNaFNCUVpEaHNmWkZDekh4eGVHR2F0K0FabUpWTS93UkRYZnkrSEZmWHMvcXM0CjgraWpSTWJQR2xwUG5CL2NteitBblFLQmdRRENWbFBIck1uQy9Td21EbnhmajQ3MkpncjBPM0pOUkdRRS9BUDIKTFNud3VNUTBqbmw2MS9FNmlPV3dBUUExKzZITGR4eG50S0pROXpLYWZ2RnE3RlUwYS9EWFpiYWtqWU1wRnQxZApBeWNxbC92VS9wT21GZnJodG9xam1BMWRqbFg0dzZLYWpiWCtkUUhsNTdNZFRLQ0xNcVdhdC9tSEl6MFBJSmQ1CkdBdVRyUUtCZ0dBTFlWbEo4TDJqcE91M29VREJLaXl0NlVTaEdTNm15VHVSaGtKa2RjaklvYVM4NUxxZTh2QncKcit5NzUxU3pzcS9QUGU5K1JWSEdhR284MjdCTkpNenRRTGVjRU5BTmlZU2xQbEhQMkRzOWtMWi9iOS9IVE53RAo5ZnRNUFlKSDl6bkpySWNuZ3RFK0swbG80SkJBZnFQdXByUzFJVnk5MUkvQ0FNTk0yWHFyCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0t",
+            "public_key_sign": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFxSkdhcTh3Z0FsMHdWOE9FVlFYVwo2VWNHQlMwU1ZGcUhkVk1iVXA1elhSV0VXOUVJaEZ5aTBER1J5NGt2NlpiWUFsaEJRMmxtYkpUeS9nVzMwRkhYCkdGU3h3M2NLNlBxTUhueEtSUENxMzVqV3Zad0E2Y2RCTGgxNTdjQmg4bC9nN2R2MlRUaGgwWlNVSWFmM2ZmcW0KTlBhOEV3TE96UXNSOXVEN2dMaHJTaTFVQWprSzI2UmNKOWJIVmpudjZ4aTM5NUJmRjJsMDJSVXoxZXJRR0ZJNAo4eHRUZlRIdlBCcitwVjRJTTJxU3RxbFRsR3EvVktEUi96eVIvUDByQTc5Sk9ibEdXNHJ5SkJDM1FibWFWKzVpCjFRSlBQVjV0YWNoM0FmMEhwbkREUWV6VHVFNFNYRUpCUWFudlNLeG9BMjZkeTVyVW15TEhOQU9ZY3UvanJlSUUKSHdJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t"
+        }
+    ]
+
+    try:
+        # Получаем информацию о письме
+        email_info = imapClient.fetch_email_info(str(email_id).encode())
+        if not email_info:
+            raise HTTPException(status_code=404, detail="Email not found")
+
+        encrypted_body = email_info.get("body")
+        encrypted_attachments = email_info.get("attachments", [])
+        decrypted_body = None
+        decrypted_attachments = []
+
+        # Проверяем, является ли тело письма зашифрованным
+        try:
+            json_body = json.loads(encrypted_body)
+            if all(key in json_body for key in ("iv", "encrypted_des_key", "signature", "encrypted_content")):
+                for key_pair in decryption_keys:
+                    try:
+                        # Декодируем данные из Base64
+                        encrypted_email = {
+                            "iv": base64.b64decode(json_body["iv"]),
+                            "encrypted_des_key": base64.b64decode(json_body["encrypted_des_key"]),
+                            "signature": base64.b64decode(json_body["signature"]),
+                            "encrypted_content": base64.b64decode(json_body["encrypted_content"]),
+                            "encrypted_attachments": [
+                                {
+                                    "filename": att["filename"],
+                                    "content": base64.b64decode(att["content"])
+                                }
+                                for att in json_body.get("encrypted_attachments", [])
+                            ]
+                        }
+
+                        # Производим дешифрование
+                        decrypted_email = secure_email_client.verify_email(
+                            encrypted_email=encrypted_email,
+                            private_key_encrypt=base64.b64decode(key_pair["private_key_encrypt"].encode("utf-8")),
+                            public_key_sign=base64.b64decode(key_pair["public_key_sign"].encode("utf-8"))
+                        )
+                        decrypted_body = decrypted_email.email_body  # Тело письма
+                        decrypted_attachments = [
+                            {"filename": att.filename, "content": att.content} for att in decrypted_email.attachments
+                        ]  # Вложения
+                    except Exception as e:
+                        raise HTTPException(status_code=400, detail=f"Failed to decrypt email: {e}")
+
+            else:
+                # Если JSON-структура не содержит нужных ключей, возвращаем тело как есть
+                decrypted_body = base64.b64decode(encrypted_body)  # Декодируем тело из Base64
+                decrypted_attachments = [
+                    {"filename": att["filename"], "content": base64.b64decode(att["content"])}
+                    for att in encrypted_attachments
+                ]
+        except json.JSONDecodeError:
+            # Если тело не является JSON, возвращаем как есть
+            decrypted_body = encrypted_body
+            decrypted_attachments = encrypted_attachments
+
+        # Возвращаем информацию о письме
+        return FetchEmailInfoResponse(
+            sender=email_info["sender"].encode("utf-8"),
+            to=email_info["to"].encode("utf-8"),
+            subject=email_info["subject"].encode("utf-8"),
+            date=email_info["date"].encode("utf-8"),
+            body=decrypted_body,
+            attachments=decrypted_attachments
+        )
+
+    except Exception as e:
+        print(f"Ошибка при получении информации о письме: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch email info: {e}")
 
 def is_valid_path(path: str) -> bool:
     try:
@@ -178,19 +262,65 @@ async def send_email(
     body: str = Form(...),
     from_name: Optional[str] = Form(None),
     to_name: Optional[str] = Form(None),
-    attachments: Optional[List[UploadFile]] = File(None)
+    attachments: Optional[List[UploadFile]] = File(None),
+    private_key_sign: Optional[str] = Form(None),
+    public_key_encrypt: Optional[str] = Form(None),
 ):
     try:
         smtpClient.open_connect()
 
-        # Обработка файлов вложений
+        # Преобразуем вложения в байтовый формат
         file_attachments = []
         if attachments:
             for file in attachments:
                 content = await file.read()
-                file_attachments.append({"filename": file.filename, "content": content})
+                file_attachments.append({
+                    "filename": file.filename,
+                    "content": content,  # Оставляем в байтовом формате
+                })
 
-        # Отправка письма через SMTP-клиент
+        # Декодируем ключи из Base64 в байты
+        if private_key_sign:
+            private_key_sign = base64.b64decode(private_key_sign)
+        if public_key_encrypt:
+            public_key_encrypt = base64.b64decode(public_key_encrypt)
+
+        # Проверяем, нужно ли шифрование
+        if private_key_sign and public_key_encrypt:
+            # Преобразуем тело письма в байты
+            body_bytes = body.encode("utf-8")
+
+            encrypted_email = secure_email_client.process_email(
+                email_body=body_bytes,
+                attachments=file_attachments,
+                private_key_sign=private_key_sign,
+                public_key_encrypt=public_key_encrypt,
+            )
+
+            content_body = {
+                "iv": base64.b64encode(encrypted_email.iv).decode("utf-8"),
+                "encrypted_des_key": base64.b64encode(encrypted_email.encrypted_des_key).decode("utf-8"),
+                "signature": base64.b64encode(encrypted_email.signature).decode("utf-8"),
+                "encrypted_content": base64.b64encode(encrypted_email.encrypted_content).decode("utf-8")
+            }
+
+            body = json.dumps(content_body, ensure_ascii=False)
+
+            # Корректное извлечение вложений
+            file_attachments = []
+            for attachment in encrypted_email.encrypted_attachments:
+                # Предполагаем, что каждый элемент является объектом EncryptedAttachment
+                file_attachments.append({
+                    "filename": attachment.filename,  # Имена вложений
+                    "content": base64.b64encode(attachment.content).decode("utf-8"),  # Контент зашифрованных вложений
+                })
+        elif private_key_sign or public_key_encrypt:
+            raise HTTPException(
+                status_code=400,
+                detail="Both private_key_sign and public_key_encrypt are required for encryption.",
+            )
+
+        # Отправка письма
         smtpClient.send_email(
             to_email=to_email,
             subject=subject,
@@ -202,5 +332,9 @@ async def send_email(
         smtpClient.close_connect()
         return SendEmailResponse(message="Email successfully sent.")
     except Exception as e:
+        print(f"Error during email sending: {e}")
         smtpClient.close_connect()
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8001)
