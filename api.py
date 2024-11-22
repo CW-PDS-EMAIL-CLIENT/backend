@@ -7,10 +7,11 @@ import base64
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Form, UploadFile, File
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from IMAPClient import IMAPClient  # Используем существующий IMAPClient
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from SMTPClient import SMTPClient
 from SecureEmailClient import SecureEmailClient
@@ -74,7 +75,10 @@ class FetchEmailInfoResponse(BaseModel):
     subject: str
     date: str
     body: str
-    attachments: Optional[List[File]] = None
+    attachments: Optional[List[str]] = None
+
+    class Config:
+        arbitrary_types_allowed = True
 
 class SaveAttachmentsRequest(BaseModel):
     save_path: str
@@ -90,7 +94,7 @@ class SendEmailRequest(BaseModel):
     body: str
     from_name: Optional[str] = None
     to_name: Optional[str] = None
-    attachments: Optional[List[UploadFile]] = None  # Используем UploadFile для загрузки файлов
+    attachments: Optional[List[UploadFile]] = File(None)  # Используем UploadFile для загрузки файлов
     private_key_sign: Optional[str] = None
     public_key_encrypt: Optional[str] = None  # Ключи для шифрования
 
@@ -111,6 +115,9 @@ async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
         ) for email in emails
     ]
     return FetchEmailsResponse(emailsList=emails_list)
+
+# Глобальный массив для хранения вложений
+global_attachments = []
 
 # API для получения информации о конкретном письме
 @app.get("/emails/{email_id}", response_model=FetchEmailInfoResponse)
@@ -134,6 +141,9 @@ async def fetch_email_info(email_id: int):
             "public_key_sign": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFxSkdhcTh3Z0FsMHdWOE9FVlFYVwo2VWNHQlMwU1ZGcUhkVk1iVXA1elhSV0VXOUVJaEZ5aTBER1J5NGt2NlpiWUFsaEJRMmxtYkpUeS9nVzMwRkhYCkdGU3h3M2NLNlBxTUhueEtSUENxMzVqV3Zad0E2Y2RCTGgxNTdjQmg4bC9nN2R2MlRUaGgwWlNVSWFmM2ZmcW0KTlBhOEV3TE96UXNSOXVEN2dMaHJTaTFVQWprSzI2UmNKOWJIVmpudjZ4aTM5NUJmRjJsMDJSVXoxZXJRR0ZJNAo4eHRUZlRIdlBCcitwVjRJTTJxU3RxbFRsR3EvVktEUi96eVIvUDByQTc5Sk9ibEdXNHJ5SkJDM1FibWFWKzVpCjFRSlBQVjV0YWNoM0FmMEhwbkREUWV6VHVFNFNYRUpCUWFudlNLeG9BMjZkeTVyVW15TEhOQU9ZY3UvanJlSUUKSHdJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t"
         }
     ]
+
+    global global_attachments
+    global_attachments.clear()  # Очищаем предыдущие вложения
 
     try:
         # Получаем информацию о письме
@@ -163,7 +173,7 @@ async def fetch_email_info(email_id: int):
                                     "filename": att["filename"],
                                     "content": base64.b64decode(att["content"])
                                 }
-                                for att in json_body.get("encrypted_attachments", [])
+                                for att in encrypted_attachments
                             ]
                         }
 
@@ -182,7 +192,7 @@ async def fetch_email_info(email_id: int):
 
             else:
                 # Если JSON-структура не содержит нужных ключей, возвращаем тело как есть
-                decrypted_body = base64.b64decode(encrypted_body)  # Декодируем тело из Base64
+                decrypted_body = base64.b64decode(encrypted_body).decode("utf-8")  # Декодируем тело из Base64
                 decrypted_attachments = [
                     {"filename": att["filename"], "content": base64.b64decode(att["content"])}
                     for att in encrypted_attachments
@@ -190,21 +200,49 @@ async def fetch_email_info(email_id: int):
         except json.JSONDecodeError:
             # Если тело не является JSON, возвращаем как есть
             decrypted_body = encrypted_body
-            decrypted_attachments = encrypted_attachments
+            decrypted_attachments = [{"filename": att["filename"], "content": att["content"]} for att in encrypted_attachments]
+
+        # Сохраняем вложения во временные файлы и обновляем global_attachments
+        attachments_dir = "attachments"
+        os.makedirs(attachments_dir, exist_ok=True)
+        for attachment in decrypted_attachments:
+            file_path = os.path.join(attachments_dir, attachment["filename"])
+            with open(file_path, "wb") as f:
+                f.write(attachment["content"])
+            global_attachments.append(file_path)
 
         # Возвращаем информацию о письме
         return FetchEmailInfoResponse(
-            sender=email_info["sender"].encode("utf-8"),
-            to=email_info["to"].encode("utf-8"),
-            subject=email_info["subject"].encode("utf-8"),
-            date=email_info["date"].encode("utf-8"),
+            sender=email_info["sender"],
+            to=email_info["to"],
+            subject=email_info["subject"],
+            date=email_info["date"],
             body=decrypted_body,
-            attachments=decrypted_attachments
+            attachments=[os.path.basename(f) for f in global_attachments],
         )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     except Exception as e:
         print(f"Ошибка при получении информации о письме: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch email info: {e}")
+
+@app.get("/attachments/{filename}")
+async def get_attachment(filename: str):
+    """
+    API для загрузки вложения.
+
+    Args:
+        filename (str): Имя файла вложения.
+
+    Returns:
+        FileResponse: Файл вложения.
+    """
+    file_path = os.path.join("attachments", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, filename=filename)
 
 def is_valid_path(path: str) -> bool:
     try:
@@ -255,7 +293,7 @@ def read_file(file_path: str):
     return content, mime_type
 
 # API для отправки письма на указанную почту
-@app.post("/emails/send", response_model=SendEmailResponse)
+@app.post("/emails/send/", response_model=SendEmailResponse)
 async def send_email(
     to_email: str = Form(...),
     subject: str = Form(...),
