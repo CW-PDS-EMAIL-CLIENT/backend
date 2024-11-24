@@ -244,54 +244,6 @@ async def get_attachment(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
 
-def is_valid_path(path: str) -> bool:
-    try:
-        import os
-
-        os.makedirs(path, exist_ok=True)
-        return os.access(path, os.W_OK)
-    except Exception:
-        return False
-
-# API для сохранения файла выбранного письма
-@app.post("/emails/save_attachments", response_model=SaveAttachmentsResponse)
-async def save_email_attachments(request: SaveAttachmentsRequest):
-    try:
-        save_path = request.save_path
-        if not is_valid_path(save_path):
-            raise ValueError("Invalid or inaccessible save path.")
-
-        # Сохраняем вложения
-        imapClient.save_attachment(save_path)
-        return SaveAttachmentsResponse(message=f"Attachments saved to {save_path}")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-def read_file(file_path: str):
-    """
-    Читает содержимое файла в зависимости от его типа.
-
-    :param file_path: Путь к файлу.
-    :return: Кортеж (содержимое файла, MIME-тип).
-    """
-    mime_type, _ = mimetypes.guess_type(file_path)
-    if mime_type is None:
-        mime_type = "application/octet-stream"  # Если тип не удалось определить
-
-    try:
-        if mime_type.startswith("text/"):
-            # Если файл текстовый
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        else:
-            # Если файл бинарный
-            with open(file_path, "rb") as f:
-                content = f.read()
-    except Exception as e:
-        raise ValueError(f"Failed to read file {file_path}: {e}")
-
-    return content, mime_type
-
 # API для отправки письма на указанную почту
 @app.post("/emails/send/", response_model=SendEmailResponse)
 async def send_email(
@@ -375,4 +327,4 @@ async def send_email(
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
