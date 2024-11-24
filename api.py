@@ -1,4 +1,3 @@
-import mimetypes
 import os.path
 import json
 from contextlib import asynccontextmanager
@@ -6,14 +5,14 @@ from contextlib import asynccontextmanager
 import base64
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Form, UploadFile, File
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Form, UploadFile, File
+from pydantic import BaseModel
 from typing import List, Optional
-from IMAPClient import IMAPClient  # Используем существующий IMAPClient
+from EProtocols.IMAPClient import IMAPClient  # Используем существующий IMAPClient
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from SMTPClient import SMTPClient
+from EProtocols.SMTPClient import SMTPClient
 from SecureEmailClient import SecureEmailClient
 
 # Использование lifespan для событий старта и остановки
