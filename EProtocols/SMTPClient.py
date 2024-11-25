@@ -85,6 +85,8 @@ class SMTPClient:
         # Отправляем письмо
         self.server.sendmail(self.email_user, to_email, msg.as_string())
 
+        return msg
+
 if __name__ == '__main__':
     smtp_server = "smtp.mail.ru"
     email_user = "donntu_test@mail.ru"

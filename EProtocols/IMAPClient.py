@@ -1,5 +1,6 @@
 import imaplib
 import email as em
+import time
 from email.header import decode_header
 import os
 
@@ -199,6 +200,79 @@ class IMAPClient:
             with open(file_path, "wb") as file:
                 file.write(content)  # Сохраняем байты данных в файл
             print(f"Вложение сохранено: {file_path}")
+
+    def decode_imap_folder_name(self, encoded_name):
+        """
+        Декодирует IMAP-имя папки из модифицированного Base64 в читаемый вид.
+        """
+        try:
+            return imaplib.IMAP4.decode(encoded_name)
+        except Exception as e:
+            print(f"Ошибка декодирования имени папки '{encoded_name}': {e}")
+            return encoded_name  # Возвращаем оригинальное имя в случае ошибки
+
+    def save_to_sent_folder(self, message, folder_name='&BB4EQgQ,BEAEMAQyBDsENQQ9BD0ESwQ1-'):
+        """
+        Сохраняет сообщение в указанную папку на IMAP-сервере.
+        :param message: MIME-сообщение в виде строки (message.as_string()).
+        :param folder_name: Название папки для сохранения (по умолчанию 'Sent').
+        """
+        try:
+            if not self.is_connection_active():
+                self.open_connect()
+
+            # Получаем список всех папок
+            status, folders = self.mail.list()
+            if status != "OK":
+                raise Exception("Не удалось получить список папок.")
+
+            # Находим закодированное имя папки
+            target_folder = None
+            for folder in folders:
+                parts = folder.decode().split(' ')
+                folder_flags = parts[0]
+                folder_encoded_name = parts[-1].strip('"')
+                folder_decoded_name = self.decode_imap_folder_name(folder_encoded_name)
+
+                # Сравниваем имя папки с желаемым
+                if folder_name in (folder_encoded_name, folder_decoded_name):
+                    target_folder = folder_encoded_name
+                    break
+
+            if not target_folder:
+                raise Exception(f"Папка '{folder_name}' не найдена на сервере.")
+
+            # Сохраняем сообщение в папке
+            self.mail.append(
+                target_folder,  # Папка (в закодированном виде)
+                "\\Sent",  # Флаг
+                imaplib.Time2Internaldate(time.time()),  # Дата
+                message.encode("utf-8")  # Сообщение
+            )
+            print(f"Сообщение сохранено в папке '{folder_name}'.")
+        except Exception as e:
+            print(f"Ошибка сохранения письма в папку '{folder_name}': {e}")
+
+    def get_folders(self):
+        """
+        Получает список папок на IMAP-сервере.
+        :return: Список папок в виде [{"name": имя_папки, "flags": атрибуты}, ...].
+        """
+        try:
+            if not self.is_connection_active():
+                self.open_connect()
+
+            status, folders = self.mail.list()
+            if status == "OK":
+                folder_list = []
+                for folder in folders:
+                    flags, separator, name = folder.decode().split(' ', 2)
+                    folder_list.append({"name": name.strip('"'), "flags": flags})
+                return folder_list
+            else:
+                return {"error": "Ошибка при получении списка папок."}
+        except Exception as e:
+            return {"error": f"Ошибка: {str(e)}"}
 
 if __name__ == '__main__':
     imap_server = "imap.mail.ru"

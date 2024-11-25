@@ -52,7 +52,7 @@ app.add_middleware(
 imap_client = IMAPClient("imap.mail.ru", "donntu_test@mail.ru", "wrixCgaMYsqXWmVbBPS7")
 
 # Инициализация SMTP-клиента
-smtp_client = SMTPClient("smtp.mail.ru", "modex.modex@mail.ru", "wqCgQPseQDsBZCk9Zd03")
+smtp_client = SMTPClient("smtp.mail.ru", "donntu_test@mail.ru", "wrixCgaMYsqXWmVbBPS7")
 
 db = RSAKeyDatabase()
 
@@ -414,7 +414,7 @@ async def send_email(
                 })
 
         # Отправка письма
-        smtp_client.send_email(
+        message = smtp_client.send_email(
             to_email=to_email,
             subject=subject,
             body=body,
@@ -423,11 +423,31 @@ async def send_email(
             attachments=file_attachments,
         )
         smtp_client.close_connect()
+
+        imap_client.save_to_sent_folder(message.as_string())
+
         return SendEmailResponse(message="Email successfully sent.")
     except Exception as e:
         print(f"Error during email sending: {e}")
         smtp_client.close_connect()
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
+
+@app.get("/folders/", response_model=List[dict])
+async def get_folders():
+    """
+    API для получения списка папок на IMAP-сервере.
+    """
+    try:
+        if not imap_client.is_connection_active():
+            imap_client.open_connect()
+
+        folders = imap_client.get_folders()
+        if isinstance(folders, dict) and "error" in folders:
+            raise HTTPException(status_code=500, detail=folders["error"])
+
+        return folders
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка сервера: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
