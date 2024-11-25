@@ -1,5 +1,6 @@
 import os.path
 import json
+import re
 from contextlib import asynccontextmanager
 
 import base64
@@ -8,6 +9,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
+
+from DB.RSAKeyDatabase import RSAKeyDatabase
 from EProtocols.IMAPClient import IMAPClient  # Используем существующий IMAPClient
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -24,6 +27,7 @@ async def lifespan(app: FastAPI):
     # Очистка при завершении
     # Остановка IMAP-клиента при завершении работы сервера
     imapClient.close_connect()
+    db.close()
     print("Приложение завершено!")
 
 
@@ -55,6 +59,8 @@ smtp_email_user = "modex.modex@mail.ru"
 smtp_email_pass = "wqCgQPseQDsBZCk9Zd03"
 
 smtpClient = SMTPClient(smtp_server, smtp_email_user, smtp_email_pass)
+
+user_encrypt = True
 
 # Определение моделей данных
 class SummaryEmailResponse(BaseModel):
@@ -118,6 +124,17 @@ async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
 # Глобальный массив для хранения вложений
 global_attachments = []
 
+# Если почта может быть без угловых скобок, оставляем только email
+def extract_email(sender):
+    email_pattern = r'<(.+?)>'
+    match = re.search(email_pattern, sender)
+    if match:
+        return match.group(1)
+    elif '@' in sender:  # Если строка уже является email
+        return sender
+    else:
+        return None
+
 # API для получения информации о конкретном письме
 @app.get("/emails/{email_id}", response_model=FetchEmailInfoResponse)
 async def fetch_email_info(email_id: int):
@@ -133,14 +150,6 @@ async def fetch_email_info(email_id: int):
     Raises:
         HTTPException: Ошибка, если письмо не найдено или ключи не подошли.
     """
-    # Локальный массив ключей
-    decryption_keys = [
-        {
-            "private_key_encrypt": "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBbENaK3dJY3I1ZW44K2UxSU80NzhMQVVsVEc1VmdwNFIvQ2ltWUtCUkl6K1RsTXhOCjNPYU9xNFIxQUJRTWNwNEdEbUVLMXFzdGh4WllPVFIrdC9GU0s5VHYyQVVTSDliL1c5Ui95WmR0QTlrdisvVFMKM3hEd3daMDBMOXJzajQ0Sm52R1l6WlpVeDBod29WSXZXVVFwWU01ZTE5UFo3QnpsOTF3MC9RaGtHVkZaVVhXZApSUmFBQ3hjQTEwWG1uYTR0NHVuYzlvMzdFWE81OFBjb1h1M1pYSGZWRnRTRTZvQzFaNFlLZkxXYnBnRWYza0pBCjk2dVMxQk1OMkdrV1FWUytlR1ROdEl5aHdHei9KY0M4VndYcURLUjRMSDRDY28vSk93WlVFV1d1bDhhSGJZdm0Kb0ZIb0ZMM0JtcUNEZzYxa0JQOTBLcFpNdjRxanBVdFRoSjhWZHdJREFRQUJBb0lCQUR6SXdvNnBweGd3OWN0eApVSWFuTnMyMDJzWE9LeVZwUjRYSEErUjNRbk1NM2JkYVQ4UUhrSmZNdzloaFlXNFJhZml5VmlrWG1KbHBVSTgvCis1SHE0RVQ5bTk1c3ppL2tIV2VHKzFzeDF0ZVNYNzZuaDNGZ1dQZUhVV2NsRXBRZnVkRE4zVnpVaGpveGZZeWkKMUt4eWErdTlJR3E3RUJseERlVjhubjBHMlZNTlRxS0NlSk84Y0JyNm9VZmxMYzB0K2Jnamhad2JGVE54NVlGSApMc1hhR1lVNFBWTlhKNFp2cFdOZ3oxdGV3K3BZdUhEWVFMQW5hUTRPUWhmdmFWMVN0bkxaK0dOWTdna2Z6NzZqCkJPZmV1azBMd2UrRndHeFZ4bUlUSjdLaC9lZUYydThYNFh2TVVqOEFSYXV5SmhHbVZ5T0t2N1lBTW9EamhQSkcKalloR2VPa0NnWUVBd2toZUd3aS8vUEpwaVoxcXhKYzVYY2pnamlwYzBidUxjQ2cvNkM2MmxJWWFzUGpMT05CZQpDUHFYWUNoS0RhSVU3b3ZwdFEwRHBrYXA2UXB0VU5jY2pSQXFGV2d1QWxZRHg3SDdTWHJqRVE4dVh4LzFHNDdxCis0Tk1mRXRQR2htSnpPMStuNTFLWlNKNlZkbUZZTmM1Y3kyT2t3c1gxeERSdTA4dnlFVG1oUXNDZ1lFQXd6YUQKZ29Uem1wYmR6eGlwcURsNFRHUndEb2NIRTlCZXhkaDV0WDNaSjJ6VWZJVXlmQmwxTmFDQTdIVlNmbWFER3liNwpmS2EwMG82QXF2VTJrVklURUpNZHBFT1BYVm4vdUVmd3luZy96c2JQK1FKb1ppYUxGT0JSRnZIejRiMFE2M2NhCnI3dHlGYjNpcjF4TnFlTXUzSFdEVEtSTVNtMzBDcTNmbXB0NG5NVUNnWUJSalhzak1mc1ZQTlNjVlozWncvanEKcTBYSHAzU3EvV1M4d2NpQnVBb2dNbUxGNHNtN29ZdTNqU2s1emUrMzVVK1FDdDhoaHNML2F5NHJpcHIwa2plRAo1ME1qRlVZcTZOeFJXUjY0YTRNaFNCUVpEaHNmWkZDekh4eGVHR2F0K0FabUpWTS93UkRYZnkrSEZmWHMvcXM0CjgraWpSTWJQR2xwUG5CL2NteitBblFLQmdRRENWbFBIck1uQy9Td21EbnhmajQ3MkpncjBPM0pOUkdRRS9BUDIKTFNud3VNUTBqbmw2MS9FNmlPV3dBUUExKzZITGR4eG50S0pROXpLYWZ2RnE3RlUwYS9EWFpiYWtqWU1wRnQxZApBeWNxbC92VS9wT21GZnJodG9xam1BMWRqbFg0dzZLYWpiWCtkUUhsNTdNZFRLQ0xNcVdhdC9tSEl6MFBJSmQ1CkdBdVRyUUtCZ0dBTFlWbEo4TDJqcE91M29VREJLaXl0NlVTaEdTNm15VHVSaGtKa2RjaklvYVM4NUxxZTh2QncKcit5NzUxU3pzcS9QUGU5K1JWSEdhR284MjdCTkpNenRRTGVjRU5BTmlZU2xQbEhQMkRzOWtMWi9iOS9IVE53RAo5ZnRNUFlKSDl6bkpySWNuZ3RFK0swbG80SkJBZnFQdXByUzFJVnk5MUkvQ0FNTk0yWHFyCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0t",
-            "public_key_sign": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFxSkdhcTh3Z0FsMHdWOE9FVlFYVwo2VWNHQlMwU1ZGcUhkVk1iVXA1elhSV0VXOUVJaEZ5aTBER1J5NGt2NlpiWUFsaEJRMmxtYkpUeS9nVzMwRkhYCkdGU3h3M2NLNlBxTUhueEtSUENxMzVqV3Zad0E2Y2RCTGgxNTdjQmg4bC9nN2R2MlRUaGgwWlNVSWFmM2ZmcW0KTlBhOEV3TE96UXNSOXVEN2dMaHJTaTFVQWprSzI2UmNKOWJIVmpudjZ4aTM5NUJmRjJsMDJSVXoxZXJRR0ZJNAo4eHRUZlRIdlBCcitwVjRJTTJxU3RxbFRsR3EvVktEUi96eVIvUDByQTc5Sk9ibEdXNHJ5SkJDM1FibWFWKzVpCjFRSlBQVjV0YWNoM0FmMEhwbkREUWV6VHVFNFNYRUpCUWFudlNLeG9BMjZkeTVyVW15TEhOQU9ZY3UvanJlSUUKSHdJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t"
-        }
-    ]
-
     global global_attachments
     global_attachments.clear()  # Очищаем предыдущие вложения
 
@@ -159,7 +168,19 @@ async def fetch_email_info(email_id: int):
         try:
             json_body = json.loads(encrypted_body)
             if all(key in json_body for key in ("iv", "encrypted_des_key", "signature", "encrypted_content")):
-                for key_pair in decryption_keys:
+
+                sender_email = extract_email(email_info["sender"])
+
+                # Работа с базой данных через менеджер контекста
+                with RSAKeyDatabase() as db:
+                    decryption_keys = db.get_personal_keys(email="modex.modex@mail.ru")
+                    signing_keys = db.get_public_keys(email=sender_email)
+
+                if not decryption_keys or not signing_keys:
+                    raise HTTPException(status_code=400, detail="No decryption or signing keys found.")
+
+                # Попытка расшифровать с каждым набором ключей
+                for private_key_encrypt, public_key_sign in zip(decryption_keys, signing_keys):
                     try:
                         # Декодируем данные из Base64
                         encrypted_email = {
@@ -179,8 +200,8 @@ async def fetch_email_info(email_id: int):
                         # Производим дешифрование
                         decrypted_email = secure_email_client.verify_email(
                             encrypted_email=encrypted_email,
-                            private_key_encrypt=base64.b64decode(key_pair["private_key_encrypt"].encode("utf-8")),
-                            public_key_sign=base64.b64decode(key_pair["public_key_sign"].encode("utf-8"))
+                            private_key_encrypt=base64.b64decode(private_key_encrypt.encode("utf-8")),
+                            public_key_sign=base64.b64decode(public_key_sign.encode("utf-8"))
                         )
                         decrypted_body = decrypted_email.email_body  # Тело письма
                         decrypted_attachments = [
@@ -251,9 +272,7 @@ async def send_email(
     body: str = Form(...),
     from_name: Optional[str] = Form(None),
     to_name: Optional[str] = Form(None),
-    attachments: Optional[List[UploadFile]] = File(None),
-    private_key_sign: Optional[str] = Form(None),
-    public_key_encrypt: Optional[str] = Form(None),
+    attachments: Optional[List[UploadFile]] = File(None)
 ):
     try:
         smtpClient.open_connect()
@@ -268,14 +287,32 @@ async def send_email(
                     "content": content,  # Оставляем в байтовом формате
                 })
 
-        # Декодируем ключи из Base64 в байты
-        if private_key_sign:
-            private_key_sign = base64.b64decode(private_key_sign)
-        if public_key_encrypt:
-            public_key_encrypt = base64.b64decode(public_key_encrypt)
-
         # Проверяем, нужно ли шифрование
-        if private_key_sign and public_key_encrypt:
+        if user_encrypt:
+            db = RSAKeyDatabase()
+
+            # Получаем ключи
+            personal_keys = db.get_personal_keys(smtp_email_user)
+            public_keys = db.get_public_keys(to_email)
+
+            db.close()
+
+            # Проверяем наличие ключей
+            if not personal_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail="There are no encryption keys available, generate new ones for this email address.",
+                )
+            elif not public_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail="There are no public keys available to encrypt the current email.",
+                )
+
+            # Получаем ключи
+            private_key_sign = personal_keys["private_key_sign"]
+            public_key_encrypt = public_keys["public_key_encrypt"]
+
             # Преобразуем тело письма в байты
             body_bytes = body.encode("utf-8")
 
@@ -303,11 +340,6 @@ async def send_email(
                     "filename": attachment.filename,  # Имена вложений
                     "content": base64.b64encode(attachment.content).decode("utf-8"),  # Контент зашифрованных вложений
                 })
-        elif private_key_sign or public_key_encrypt:
-            raise HTTPException(
-                status_code=400,
-                detail="Both private_key_sign and public_key_encrypt are required for encryption.",
-            )
 
         # Отправка письма
         smtpClient.send_email(
