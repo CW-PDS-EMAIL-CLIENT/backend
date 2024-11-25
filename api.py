@@ -65,8 +65,6 @@ smtp_client = SMTPClient("smtp.mail.ru", "donntu_test@mail.ru", "wrixCgaMYsqXWmV
 
 db = RSAKeyDatabase()
 
-user_encrypt = True
-
 class SaveAttachmentsRequest(BaseModel):
     save_path: str
 
@@ -408,7 +406,8 @@ async def send_email(
     body: str = Form(...),
     from_name: Optional[str] = Form(None),
     to_name: Optional[str] = Form(None),
-    attachments: Optional[List[UploadFile]] = File(None)
+    attachments: Optional[List[UploadFile]] = File(None),
+    use_encrypt: Optional[bool] = Form(True)
 ):
     try:
         smtp_client.open_connect()
@@ -424,7 +423,7 @@ async def send_email(
                 })
 
         # Проверяем, нужно ли шифрование
-        if user_encrypt:
+        if use_encrypt:
             encrypt_keys = await db.get_encrypt_sign_keys(
                 current_sender_email=smtp_client.email_user,
                 recipient_email=to_email
