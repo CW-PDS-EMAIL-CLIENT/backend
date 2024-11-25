@@ -68,51 +68,66 @@ class IMAPClient:
         except imaplib.IMAP4.error:  # Общая ошибка IMAP-соединения
             return False
 
-    def fetch_emails(self, start=None, limit=None):
-        """Получает список писем."""
-        # Проверка на активность соединения перед запросом
-        if not self.is_connection_active():
-            print("Соединение потеряно. Переподключение...")
-            self.close_connect()
-            self.open_connect()
+    def fetch_emails(self, folder_name="Inbox", start=None, limit=None):
+        """
+        Получает список писем из указанной папки.
+        :param folder_name: Название папки (по умолчанию 'Inbox').
+        :param start: Индекс первого письма (опционально).
+        :param limit: Максимальное количество писем для получения (опционально).
+        :return: Список писем в формате [{"id": ID, "sender": Отправитель, "subject": Тема, "date": Дата}, ...].
+        """
+        try:
+            # Проверяем соединение
+            if not self.is_connection_active():
+                print("Соединение потеряно. Переподключение...")
+                self.close_connect()
+                self.open_connect()
 
-        # Ищем все письма
-        status, messages = self.mail.search(None, "ALL")
-        if status != "OK":
-            print("Ошибка при поиске писем.")
-            return []
-
-        # Получаем список ID писем
-        email_ids = messages[0].split()
-
-        # Если указано ограничение, обрезаем список
-        if start:
-            email_ids = email_ids[start:]
-
-        if limit:
-            email_ids = email_ids[:limit]
-
-        emails = []
-        for email_id in reversed(email_ids):
-            # Получаем содержимое письма
-            status, msg_data = self.mail.fetch(email_id, "(RFC822)")
+            # Переходим в указанную папку
+            status, _ = self.mail.select(folder_name)
             if status != "OK":
-                print(f"Ошибка при получении письма с ID {email_id}")
-                continue
+                raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
 
-            # Парсим письмо
-            msg = em.message_from_bytes(msg_data[0][1])
+            # Ищем все письма
+            status, messages = self.mail.search(None, "ALL")
+            if status != "OK":
+                print(f"Ошибка при поиске писем в папке '{folder_name}'.")
+                return []
 
-            # Декодируем заголовок
-            subject = self.decode_mime_words(msg["Subject"])
+            # Получаем список ID писем
+            email_ids = messages[0].split()
 
-            # Декодируем отправителя
-            from_ = self.decode_mime_words(msg["From"])
-            date = msg.get("Date")
+            # Если указано ограничение, обрезаем список
+            if start:
+                email_ids = email_ids[start:]
 
-            emails.append({"id": email_id, "sender": from_, "subject": subject, "date": date})
+            if limit:
+                email_ids = email_ids[:limit]
 
-        return reversed(emails)
+            emails = []
+            for email_id in reversed(email_ids):
+                # Получаем содержимое письма
+                status, msg_data = self.mail.fetch(email_id, "(RFC822)")
+                if status != "OK":
+                    print(f"Ошибка при получении письма с ID {email_id}")
+                    continue
+
+                # Парсим письмо
+                msg = em.message_from_bytes(msg_data[0][1])
+
+                # Декодируем заголовок
+                subject = self.decode_mime_words(msg["Subject"])
+
+                # Декодируем отправителя
+                from_ = self.decode_mime_words(msg["From"])
+                date = msg.get("Date")
+
+                emails.append({"id": email_id, "sender": from_, "subject": subject, "date": date})
+
+            return list(reversed(emails))  # Возвращаем письма в хронологическом порядке
+        except Exception as e:
+            print(f"Ошибка при получении писем из папки '{folder_name}': {e}")
+            return []
 
     def get_attachments(self, msg):
         """Извлекает все вложения из письма."""
@@ -129,13 +144,18 @@ class IMAPClient:
                     })
         return attachments
 
-    def fetch_email_info(self, email_id):
+    def fetch_email_info(self, email_id, folder_name="Inbox"):
         """Получает полную информацию о письме по его ID, включая вложения."""
         try:
             # Проверяем состояние соединения
             if not self.mail.state == 'SELECTED':
                 print("Reconnecting to IMAP server...")
                 self.open_connect()
+
+            # Переходим в указанную папку
+            status, _ = self.mail.select(folder_name)
+            if status != "OK":
+                raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
 
             status, msg_data = self.mail.fetch(email_id, "(RFC822)")
 

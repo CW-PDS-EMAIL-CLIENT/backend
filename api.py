@@ -58,29 +58,6 @@ db = RSAKeyDatabase()
 
 user_encrypt = True
 
-# Определение моделей данных
-class SummaryEmailResponse(BaseModel):
-    id: int
-    sender: str
-    subject: str
-    date: str
-
-
-class FetchEmailsResponse(BaseModel):
-    emailsList: List[SummaryEmailResponse]
-
-
-class FetchEmailInfoResponse(BaseModel):
-    sender: str
-    to: str
-    subject: str
-    date: str
-    body: str
-    attachments: Optional[List[str]] = None
-
-    class Config:
-        arbitrary_types_allowed = True
-
 class SaveAttachmentsRequest(BaseModel):
     save_path: str
 
@@ -155,9 +132,57 @@ async def current_smtp_account():
     }
 
 # API для получения списка писем
-@app.get("/emails/", response_model=FetchEmailsResponse)
-async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
-    emails = imap_client.fetch_emails(offset, limit)
+# Определение моделей данных
+class SummaryEmailResponse(BaseModel):
+    id: int
+    sender: str
+    subject: str
+    date: str
+
+
+from typing import Optional, List
+from pydantic import BaseModel
+
+
+# Модели данных
+class FetchEmailsRequest(BaseModel):
+    folder_name: Optional[str] = "Inbox"
+    offset: Optional[int] = None
+    limit: Optional[int] = None
+
+
+class SummaryEmailResponse(BaseModel):
+    id: int
+    sender: str
+    subject: str
+    date: str
+
+
+class FetchEmailsResponse(BaseModel):
+    emailsList: List[SummaryEmailResponse]
+
+
+# Изменённый API
+@app.post("/emails/", response_model=FetchEmailsResponse)
+async def fetch_emails(request: FetchEmailsRequest):
+    """
+    Fetch emails from a specified folder with optional pagination.
+
+    Args:
+        request (FetchEmailsRequest): Parameters in JSON format.
+
+    Returns:
+        FetchEmailsResponse: List of emails.
+    """
+    # Достаем параметры из запроса
+    folder_name = request.folder_name
+    offset = request.offset
+    limit = request.limit
+
+    # Вызываем функцию для получения писем
+    emails = imap_client.fetch_emails(folder_name=folder_name, start=offset, limit=limit)
+
+    # Формируем список писем
     emails_list = [
         SummaryEmailResponse(
             id=email["id"],
@@ -166,6 +191,8 @@ async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
             date=email["date"]
         ) for email in emails
     ]
+
+    # Возвращаем результат
     return FetchEmailsResponse(emailsList=emails_list)
 
 # Модели данных для авторизации
@@ -214,13 +241,28 @@ def extract_email(sender):
         return None
 
 # API для получения информации о конкретном письме
-@app.get("/emails/{email_id}", response_model=FetchEmailInfoResponse)
-async def fetch_email_info(email_id: int):
+class FetchEmailInfoRequest(BaseModel):
+    email_id: int
+    folder_name: Optional[str] = "Inbox"
+
+class FetchEmailInfoResponse(BaseModel):
+    sender: str
+    to: str
+    subject: str
+    date: str
+    body: str
+    attachments: Optional[List[str]] = None
+
+    class Config:
+        arbitrary_types_allowed = True
+
+@app.post("/emails/info/", response_model=FetchEmailInfoResponse)
+async def fetch_email_info(request: FetchEmailInfoRequest):
     """
     API для получения информации о письме с декодированием Base64 и автоматическим дешифрованием.
 
     Args:
-        email_id (int): ID письма.
+        request (FetchEmailInfoRequest): Параметры запроса с ID письма и именем папки.
 
     Returns:
         FetchEmailInfoResponse: Информация о письме.
@@ -232,8 +274,13 @@ async def fetch_email_info(email_id: int):
     global_attachments.clear()  # Очищаем предыдущие вложения
 
     try:
+
+        # Получаем параметры из тела запроса
+        email_id = request.email_id
+        folder_name = request.folder_name
+
         # Получаем информацию о письме
-        email_info = imap_client.fetch_email_info(str(email_id).encode())
+        email_info = imap_client.fetch_email_info(email_id=str(email_id).encode(), folder_name=folder_name)
         if not email_info:
             raise HTTPException(status_code=404, detail="Email not found")
 

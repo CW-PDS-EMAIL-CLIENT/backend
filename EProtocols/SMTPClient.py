@@ -4,7 +4,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from email.header import Header
-from email.utils import formataddr
+from email.utils import formataddr, formatdate
+
 
 class SMTPClient:
     def __init__(self, smtp_server, email_user, email_pass, port=587, timeout=5):
@@ -66,6 +67,7 @@ class SMTPClient:
         msg['From'] = formataddr((str(Header(from_name, 'utf-8')), self.email_user) if from_name else self.email_user)
         msg['To'] = formataddr((str(Header(to_name, 'utf-8')), to_email) if to_name else to_email)
         msg['Subject'] = Header(subject, 'utf-8')
+        msg['Date'] = formatdate(localtime=True)  # Генерация текущей даты и времени
 
         # Добавляем тело письма
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
