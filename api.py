@@ -22,12 +22,14 @@ from SecureEmailClient import SecureEmailClient
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Инициализация при старте
+    await db.connect()
+    await db.create_tables()
     print("Приложение запущено!")
     yield
     # Очистка при завершении
     # Остановка IMAP-клиента при завершении работы сервера
     imapClient.close_connect()
-    db.close()
+    await db.disconnect()
     print("Приложение завершено!")
 
 
@@ -59,6 +61,8 @@ smtp_email_user = "modex.modex@mail.ru"
 smtp_email_pass = "wqCgQPseQDsBZCk9Zd03"
 
 smtpClient = SMTPClient(smtp_server, smtp_email_user, smtp_email_pass)
+
+db = RSAKeyDatabase()
 
 user_encrypt = True
 
@@ -172,9 +176,9 @@ async def fetch_email_info(email_id: int):
                 sender_email = extract_email(email_info["sender"])
 
                 # Работа с базой данных через менеджер контекста
-                with RSAKeyDatabase() as db:
-                    decryption_keys = db.get_personal_keys(email="modex.modex@mail.ru")
-                    signing_keys = db.get_public_keys(email=sender_email)
+
+                decryption_keys = await db.get_personal_keys(email=sender_email)
+                signing_keys = await db.get_public_keys(email=sender_email)
 
                 if not decryption_keys or not signing_keys:
                     raise HTTPException(status_code=400, detail="No decryption or signing keys found.")
@@ -200,8 +204,8 @@ async def fetch_email_info(email_id: int):
                         # Производим дешифрование
                         decrypted_email = secure_email_client.verify_email(
                             encrypted_email=encrypted_email,
-                            private_key_encrypt=base64.b64decode(private_key_encrypt.encode("utf-8")),
-                            public_key_sign=base64.b64decode(public_key_sign.encode("utf-8"))
+                            private_key_encrypt=private_key_encrypt,
+                            public_key_sign=public_key_sign
                         )
                         decrypted_body = decrypted_email.email_body  # Тело письма
                         decrypted_attachments = [
