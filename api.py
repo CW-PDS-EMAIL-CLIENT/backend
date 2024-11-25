@@ -24,11 +24,12 @@ async def lifespan(app: FastAPI):
     # Инициализация при старте
     await db.connect()
     await db.create_tables()
+    imap_client.open_connect()
     print("Приложение запущено!")
     yield
     # Очистка при завершении
     # Остановка IMAP-клиента при завершении работы сервера
-    imapClient.close_connect()
+    imap_client.close_connect()
     await db.disconnect()
     print("Приложение завершено!")
 
@@ -48,19 +49,10 @@ app.add_middleware(
 )
 
 # Инициализация IMAP-клиента
-imap_server = "imap.mail.ru"
-email_user = "donntu_test@mail.ru"  # modex.modex@mail.ru   #   donntu_test@mail.ru
-email_pass = "wrixCgaMYsqXWmVbBPS7" # MsJE9vLGRFkDV6ECMLdF  #   wrixCgaMYsqXWmVbBPS7
-
-imapClient = IMAPClient(imap_server, email_user, email_pass)
-imapClient.open_connect()
+imap_client = IMAPClient("imap.mail.ru", "donntu_test@mail.ru", "wrixCgaMYsqXWmVbBPS7")
 
 # Инициализация SMTP-клиента
-smtp_server = "smtp.mail.ru"
-smtp_email_user = "modex.modex@mail.ru"
-smtp_email_pass = "wqCgQPseQDsBZCk9Zd03"
-
-smtpClient = SMTPClient(smtp_server, smtp_email_user, smtp_email_pass)
+smtp_client = SMTPClient("smtp.mail.ru", "modex.modex@mail.ru", "wqCgQPseQDsBZCk9Zd03")
 
 db = RSAKeyDatabase()
 
@@ -111,10 +103,61 @@ class SendEmailRequest(BaseModel):
 class SendEmailResponse(BaseModel):
     message: str
 
+# API для авторизации под другим Email
+# Модели данных для смены учетной записи
+class ChangeAccountRequest(BaseModel):
+    email_user: str
+    email_pass: str
+    imap_server: Optional[str] = None
+    smtp_server: Optional[str] = None
+    port: Optional[int] = None
+
+@app.post("/change_imap_account/")
+async def change_imap_account(request: ChangeAccountRequest):
+    try:
+        imap_client.change_account(
+            new_email_user=request.email_user,
+            new_email_pass=request.email_pass,
+            new_imap_server=request.imap_server,
+            new_port=request.port
+        )
+        return {"message": f"IMAP account changed to {request.email_user}"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error changing IMAP account: {str(e)}")
+
+@app.post("/change_smtp_account/")
+async def change_smtp_account(request: ChangeAccountRequest):
+    try:
+        smtp_client.change_account(
+            new_email_user=request.email_user,
+            new_email_pass=request.email_pass,
+            new_smtp_server=request.smtp_server,
+            new_port=request.port
+        )
+        return {"message": f"SMTP account changed to {request.email_user}"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error changing SMTP account: {str(e)}")
+
+@app.get("/current_imap_account/")
+async def current_imap_account():
+    return {
+        "imap_server": imap_client.imap_server,
+        "email_user": imap_client.email_user,
+        "port": imap_client.port
+    }
+
+@app.get("/current_smtp_account/")
+async def current_smtp_account():
+    return {
+        "smtp_server": smtp_client.smtp_server,
+        "email_user": smtp_client.email_user,
+        "port": smtp_client.port
+    }
+
 # API для получения списка писем
 @app.get("/emails/", response_model=FetchEmailsResponse)
 async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
-    emails = imapClient.fetch_emails(offset, limit)
+    emails = imap_client.fetch_emails(offset, limit)
     emails_list = [
         SummaryEmailResponse(
             id=email["id"],
@@ -124,6 +167,37 @@ async def fetch_emails(offset: Optional[int] = 0, limit: Optional[int] = None):
         ) for email in emails
     ]
     return FetchEmailsResponse(emailsList=emails_list)
+
+# Модели данных для авторизации
+class AccountCredentials(BaseModel):
+    email_user: str
+    email_pass: str
+    imap_server: Optional[str] = "imap.mail.ru"  # Значение по умолчанию
+    smtp_server: Optional[str] = "smtp.mail.ru"  # Значение по умолчанию
+    imap_port: Optional[int] = 993  # Значение по умолчанию
+    smtp_port: Optional[int] = 587  # Значение по умолчанию
+
+@app.post("/authorize_account/")
+async def authorize_account(credentials: AccountCredentials):
+    try:
+        # Авторизация IMAP
+        imap_client.change_account(
+            new_email_user=credentials.email_user,
+            new_email_pass=credentials.email_pass,
+            new_imap_server=credentials.imap_server,
+            new_port=credentials.imap_port
+        )
+        # Авторизация SMTP
+        smtp_client.change_account(
+            new_email_user=credentials.email_user,
+            new_email_pass=credentials.email_pass,
+            new_smtp_server=credentials.smtp_server,
+            new_port=credentials.smtp_port
+        )
+
+        return {"message": "IMAP and SMTP accounts successfully authorized."}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error during account authorization: {str(e)}")
 
 # Глобальный массив для хранения вложений
 global_attachments = []
@@ -159,7 +233,7 @@ async def fetch_email_info(email_id: int):
 
     try:
         # Получаем информацию о письме
-        email_info = imapClient.fetch_email_info(str(email_id).encode())
+        email_info = imap_client.fetch_email_info(str(email_id).encode())
         if not email_info:
             raise HTTPException(status_code=404, detail="Email not found")
 
@@ -177,7 +251,7 @@ async def fetch_email_info(email_id: int):
 
                 # Работа с базой данных через менеджер контекста
 
-                decryption_keys = await db.get_decrypt_keys(current_recipient_email=email_user, sender_email=sender_email)
+                decryption_keys = await db.get_decrypt_keys(current_recipient_email=imap_client.email_user, sender_email=sender_email)
 
                 if not decryption_keys:
                     raise HTTPException(status_code=400, detail="No decryption or signing keys found.")
@@ -281,7 +355,7 @@ async def send_email(
     attachments: Optional[List[UploadFile]] = File(None)
 ):
     try:
-        smtpClient.open_connect()
+        smtp_client.open_connect()
 
         # Преобразуем вложения в байтовый формат
         file_attachments = []
@@ -296,7 +370,7 @@ async def send_email(
         # Проверяем, нужно ли шифрование
         if user_encrypt:
             encrypt_keys = await db.get_encrypt_sign_keys(
-                current_sender_email=smtp_email_user,
+                current_sender_email=smtp_client.email_user,
                 recipient_email=to_email
             )
 
@@ -340,7 +414,7 @@ async def send_email(
                 })
 
         # Отправка письма
-        smtpClient.send_email(
+        smtp_client.send_email(
             to_email=to_email,
             subject=subject,
             body=body,
@@ -348,11 +422,11 @@ async def send_email(
             to_name=to_name,
             attachments=file_attachments,
         )
-        smtpClient.close_connect()
+        smtp_client.close_connect()
         return SendEmailResponse(message="Email successfully sent.")
     except Exception as e:
         print(f"Error during email sending: {e}")
-        smtpClient.close_connect()
+        smtp_client.close_connect()
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
 
 if __name__ == "__main__":

@@ -28,6 +28,25 @@ class SMTPClient:
             self.server.quit()
             self.server = None
 
+    def change_account(self, new_email_user, new_email_pass, new_smtp_server=None, new_port=None):
+        """
+        Меняет учетные данные и параметры подключения для SMTP.
+        """
+        # Закрываем текущее соединение
+        self.close_connect()
+
+        # Обновляем учетные данные и параметры подключения
+        self.email_user = new_email_user
+        self.email_pass = new_email_pass
+        if new_smtp_server:
+            self.smtp_server = new_smtp_server
+        if new_port:
+            self.port = new_port
+
+        # Открываем новое соединение с новыми учетными данными
+        self.open_connect()
+        print(f"Авторизация выполнена с новым аккаунтом: {self.email_user} на сервере {self.smtp_server}:{self.port}")
+
     def send_email(self, to_email, subject, body, from_name=None, to_name=None, attachments=None):
         """
         Отправляет письмо через SMTP-сервер.

@@ -28,6 +28,25 @@ class IMAPClient:
             self.mail.logout()
             self.mail = None
 
+    def change_account(self, new_email_user, new_email_pass, new_imap_server=None, new_port=None):
+        """
+        Меняет учетные данные и параметры подключения для IMAP.
+        """
+        # Закрываем текущее соединение
+        self.close_connect()
+
+        # Обновляем учетные данные и параметры подключения
+        self.email_user = new_email_user
+        self.email_pass = new_email_pass
+        if new_imap_server:
+            self.imap_server = new_imap_server
+        if new_port:
+            self.port = new_port
+
+        # Открываем новое соединение с новыми учетными данными
+        self.open_connect()
+        print(f"Авторизация выполнена с новым аккаунтом: {self.email_user} на сервере {self.imap_server}:{self.port}")
+
     def decode_mime_words(self, s):
         """Декодирует закодированные слова в MIME-заголовке."""
         decoded_parts = []
