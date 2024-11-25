@@ -177,15 +177,17 @@ async def fetch_email_info(email_id: int):
 
                 # Работа с базой данных через менеджер контекста
 
-                decryption_keys = await db.get_personal_keys(email=sender_email)
-                signing_keys = await db.get_public_keys(email=sender_email)
+                decryption_keys = await db.get_decrypt_keys(current_recipient_email=email_user, sender_email=sender_email)
 
-                if not decryption_keys or not signing_keys:
+                if not decryption_keys:
                     raise HTTPException(status_code=400, detail="No decryption or signing keys found.")
 
                 # Попытка расшифровать с каждым набором ключей
-                for private_key_encrypt, public_key_sign in zip(decryption_keys, signing_keys):
+                for key_pair in decryption_keys:
                     try:
+                        private_key_encrypt = key_pair["private_key_encrypt"]
+                        public_key_sign = key_pair["public_key_sign"]
+
                         # Декодируем данные из Base64
                         encrypted_email = {
                             "iv": base64.b64decode(json_body["iv"]),
@@ -293,29 +295,21 @@ async def send_email(
 
         # Проверяем, нужно ли шифрование
         if user_encrypt:
-            db = RSAKeyDatabase()
-
-            # Получаем ключи
-            personal_keys = db.get_personal_keys(smtp_email_user)
-            public_keys = db.get_public_keys(to_email)
-
-            db.close()
+            encrypt_keys = await db.get_encrypt_sign_keys(
+                current_sender_email=smtp_email_user,
+                recipient_email=to_email
+            )
 
             # Проверяем наличие ключей
-            if not personal_keys:
+            if not encrypt_keys:
                 raise HTTPException(
                     status_code=400,
                     detail="There are no encryption keys available, generate new ones for this email address.",
                 )
-            elif not public_keys:
-                raise HTTPException(
-                    status_code=400,
-                    detail="There are no public keys available to encrypt the current email.",
-                )
 
             # Получаем ключи
-            private_key_sign = personal_keys["private_key_sign"]
-            public_key_encrypt = public_keys["public_key_encrypt"]
+            private_key_sign = encrypt_keys["private_key_sign"]
+            public_key_encrypt = encrypt_keys["public_key_encrypt"]
 
             # Преобразуем тело письма в байты
             body_bytes = body.encode("utf-8")
