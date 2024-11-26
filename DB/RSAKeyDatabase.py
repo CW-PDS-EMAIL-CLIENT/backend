@@ -18,34 +18,49 @@ class RSAKeyDatabase:
 
     async def create_tables(self):
         """Создаёт таблицы, если они ещё не существуют."""
+        # Таблица для хранения email-адресов
         await self.database.execute("""
         CREATE TABLE IF NOT EXISTS Emails (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL
         )
         """)
+
+        # Таблица для хранения личных RSA-ключей
         await self.database.execute("""
-        CREATE TABLE IF NOT EXISTS PersonalRSAKeys (
+        CREATE TABLE IF NOT EXISTS PrivateRSAKeys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email_id INTEGER NOT NULL,
+            sender_email_id INTEGER NOT NULL,
+            current_recipient_email_id INTEGER NOT NULL,
             private_key_sign BLOB NOT NULL,
             public_key_sign BLOB NOT NULL,
             private_key_encrypt BLOB NOT NULL,
             public_key_encrypt BLOB NOT NULL,
             create_date DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-            FOREIGN KEY (email_id) REFERENCES Emails (id) ON DELETE CASCADE ON UPDATE CASCADE
+            FOREIGN KEY (sender_email_id) REFERENCES Emails (id) 
+                ON DELETE CASCADE 
+                ON UPDATE CASCADE,
+            FOREIGN KEY (current_recipient_email_id) REFERENCES Emails (id) 
+                ON DELETE CASCADE 
+                ON UPDATE CASCADE
         )
         """)
+
+        # Таблица для хранения публичных RSA-ключей
         await self.database.execute("""
         CREATE TABLE IF NOT EXISTS PublicRSAKeys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender_email_id INTEGER NOT NULL,
+            current_sender_email_id INTEGER NOT NULL,
             recipient_email_id INTEGER NOT NULL,
             public_key_sign BLOB NOT NULL,
             public_key_encrypt BLOB NOT NULL,
             create_date DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-            FOREIGN KEY (sender_email_id) REFERENCES Emails (id) ON DELETE CASCADE ON UPDATE CASCADE,
-            FOREIGN KEY (recipient_email_id) REFERENCES Emails (id) ON DELETE CASCADE ON UPDATE CASCADE
+            FOREIGN KEY (current_sender_email_id) REFERENCES Emails (id) 
+                ON DELETE CASCADE 
+                ON UPDATE CASCADE,
+            FOREIGN KEY (recipient_email_id) REFERENCES Emails (id) 
+                ON DELETE CASCADE 
+                ON UPDATE CASCADE
         )
         """)
 
@@ -60,27 +75,40 @@ class RSAKeyDatabase:
             return row["id"]
         raise HTTPException(status_code=500, detail="Не удалось вставить email.")
 
-    async def insert_personal_keys(
-        self,
-        email: str,
-        private_key_sign: bytes,
-        public_key_sign: bytes,
-        private_key_encrypt: bytes,
-        public_key_encrypt: bytes,
-        create_date: str = None
+    async def insert_private_keys(
+            self,
+            sender_email: str,
+            current_recipient_email: str,
+            private_key_sign: bytes,
+            public_key_sign: bytes,
+            private_key_encrypt: bytes,
+            public_key_encrypt: bytes,
+            create_date: str = None
     ):
-        """Вставляет личные RSA-ключи для указанного email."""
-        email_id = await self.insert_email(email)
+        """Вставляет приватные RSA-ключи для указанных email-адресов."""
+        sender_id = await self.insert_email(sender_email)
+        recipient_id = await self.insert_email(current_recipient_email)
+
         if not create_date:
             create_date = self.get_current_date()
 
         query = """
-        INSERT INTO PersonalRSAKeys (
-            email_id, private_key_sign, public_key_sign, private_key_encrypt, public_key_encrypt, create_date
-        ) VALUES (:email_id, :private_key_sign, :public_key_sign, :private_key_encrypt, :public_key_encrypt, :create_date)
+        INSERT INTO PrivateRSAKeys (
+            sender_email_id, current_recipient_email_id, 
+            private_key_sign, public_key_sign, 
+            private_key_encrypt, public_key_encrypt, 
+            create_date
+        ) 
+        VALUES (
+            :sender_id, :recipient_id, 
+            :private_key_sign, :public_key_sign, 
+            :private_key_encrypt, :public_key_encrypt, 
+            :create_date
+        )
         """
-        await self.database.execute(query, {
-            "email_id": email_id,
+        return await self.database.execute(query, {
+            "sender_id": sender_id,
+            "recipient_id": recipient_id,
             "private_key_sign": private_key_sign,
             "public_key_sign": public_key_sign,
             "private_key_encrypt": private_key_encrypt,
@@ -89,25 +117,33 @@ class RSAKeyDatabase:
         })
 
     async def insert_public_keys(
-        self,
-        sender_email: str,
-        recipient_email: str,
-        public_key_sign: bytes,
-        public_key_encrypt: bytes,
-        create_date: str = None
+            self,
+            current_sender_email: str,
+            recipient_email: str,
+            public_key_sign: bytes,
+            public_key_encrypt: bytes,
+            create_date: str = None
     ):
         """Вставляет публичные RSA-ключи для отправителя и получателя."""
-        sender_id = await self.insert_email(sender_email)
+        sender_id = await self.insert_email(current_sender_email)
         recipient_id = await self.insert_email(recipient_email)
+
         if not create_date:
             create_date = self.get_current_date()
 
         query = """
         INSERT INTO PublicRSAKeys (
-            sender_email_id, recipient_email_id, public_key_sign, public_key_encrypt, create_date
-        ) VALUES (:sender_id, :recipient_id, :public_key_sign, :public_key_encrypt, :create_date)
+            current_sender_email_id, recipient_email_id, 
+            public_key_sign, public_key_encrypt, 
+            create_date
+        ) 
+        VALUES (
+            :sender_id, :recipient_id, 
+            :public_key_sign, :public_key_encrypt, 
+            :create_date
+        )
         """
-        await self.database.execute(query, {
+        return await self.database.execute(query, {
             "sender_id": sender_id,
             "recipient_id": recipient_id,
             "public_key_sign": public_key_sign,
@@ -115,76 +151,53 @@ class RSAKeyDatabase:
             "create_date": create_date,
         })
 
-    async def get_public_keys(self, sender_email: str, recipient_email: str, date_limit: str = None):
-        """Получает публичные ключи для указанных отправителя и получателя до указанной даты."""
+    async def get_current_public_keys(
+            self, current_sender_email: str, recipient_email: str, date_limit: str = None
+    ):
+        """Получает публичные ключи для указанных отправителя и получателя из PrivateRSAKeys."""
         if not date_limit:
             date_limit = self.get_current_date()
 
         query = """
-        SELECT pk.public_key_sign, pk.public_key_encrypt
-        FROM PublicRSAKeys pk
-        JOIN Emails sender ON pk.sender_email_id = sender.id
-        JOIN Emails recipient ON pk.recipient_email_id = recipient.id
-        WHERE sender.email = :sender_email AND recipient.email = :recipient_email AND pk.create_date <= :date_limit
-        ORDER BY pk.create_date DESC
+        SELECT prk.public_key_sign, prk.public_key_encrypt
+        FROM PrivateRSAKeys prk
+        JOIN Emails sender ON prk.sender_email_id = sender.id
+        JOIN Emails recipient ON prk.current_recipient_email_id = recipient.id
+        WHERE 
+            sender.email = :sender_email 
+            AND recipient.email = :recipient_email 
+            AND prk.create_date <= :date_limit
+        ORDER BY prk.create_date DESC
         """
         rows = await self.database.fetch_all(query, {
-            "sender_email": sender_email,
+            "sender_email": current_sender_email,
             "recipient_email": recipient_email,
             "date_limit": date_limit
         })
-        return [{"public_key_sign": row["public_key_sign"], "public_key_encrypt": row["public_key_encrypt"]} for row in rows]
-
-    async def get_personal_keys(self, email: str, date_limit: str = None):
-        """Получает личные ключи для указанного email до указанной даты."""
-        if not date_limit:
-            date_limit = self.get_current_date()
-
-        query = """
-        SELECT private_key_sign, public_key_sign, private_key_encrypt, public_key_encrypt
-        FROM PersonalRSAKeys prk
-        JOIN Emails em ON prk.email_id = em.id
-        WHERE em.email = :email AND prk.create_date <= :date_limit
-        ORDER BY prk.create_date DESC
-        LIMIT 1
-        """
-        row = await self.database.fetch_one(query, {"email": email, "date_limit": date_limit})
-        if row:
-            return {
-                "private_key_sign": row["private_key_sign"],
-                "public_key_sign": row["public_key_sign"],
-                "private_key_encrypt": row["private_key_encrypt"],
-                "public_key_encrypt": row["public_key_encrypt"],
-            }
-        return None
-
-    async def get_emails(self):
-        """Возвращает список всех email из таблицы Emails."""
-        query = "SELECT email FROM Emails"
-        rows = await self.database.fetch_all(query)
-        return [row["email"] for row in rows] if rows else []
+        return [{"public_key_sign": row["public_key_sign"], "public_key_encrypt": row["public_key_encrypt"]} for row in
+                rows]
 
     async def get_decrypt_keys(
             self, current_recipient_email: str, sender_email: str, date_limit: str = None
     ):
-        """Получает приватный ключ получателя и публичный ключ цифровой подписи отправителя для указанных email-адресов до указанной даты."""
+        """Получает приватный ключ получателя и публичный ключ подписи отправителя."""
         if not date_limit:
             date_limit = self.get_current_date()
 
         query = """
         SELECT 
-            recipient_keys.private_key_encrypt AS recipient_private_key_encrypt,
-            pk.public_key_sign AS sender_public_key_sign
-        FROM PublicRSAKeys pk
-        JOIN Emails sender_email ON pk.sender_email_id = sender_email.id
-        JOIN Emails recipient_email ON pk.recipient_email_id = recipient_email.id
-        JOIN PersonalRSAKeys recipient_keys ON recipient_keys.email_id = recipient_email.id
+            prk.private_key_encrypt AS recipient_private_key_encrypt,
+            pub.public_key_sign AS sender_public_key_sign
+        FROM PublicRSAKeys pub
+        JOIN Emails sender ON pub.current_sender_email_id = sender.id
+        JOIN Emails recipient ON pub.recipient_email_id = recipient.id
+        JOIN PrivateRSAKeys prk ON prk.current_recipient_email_id = recipient.id
         WHERE 
-            sender_email.email = :sender_email 
-            AND recipient_email.email = :recipient_email 
-            AND pk.create_date <= :date_limit
-            AND recipient_keys.create_date <= :date_limit
-        ORDER BY pk.create_date DESC;
+            sender.email = :sender_email 
+            AND recipient.email = :recipient_email 
+            AND pub.create_date <= :date_limit
+            AND prk.create_date <= :date_limit
+        ORDER BY pub.create_date DESC
         """
         rows = await self.database.fetch_all(query, {
             "sender_email": sender_email,
@@ -207,28 +220,26 @@ class RSAKeyDatabase:
             self, current_sender_email: str, recipient_email: str, date_limit: str = None
     ):
         """
-        Получает публичный ключ для шифрования получателя и приватный ключ для подписи отправителя
-        для указанных email-адресов до указанной даты (ограничение одним набором ключей).
+        Получает публичный ключ для шифрования получателя и приватный ключ для подписи отправителя.
         """
         if not date_limit:
             date_limit = self.get_current_date()
 
         query = """
         SELECT 
-            recipient_keys.public_key_encrypt AS recipient_public_key_encrypt,
-            sender_keys.private_key_sign AS sender_private_key_sign
-        FROM PublicRSAKeys pk
-        JOIN Emails sender_email ON pk.sender_email_id = sender_email.id
-        JOIN Emails recipient_email ON pk.recipient_email_id = recipient_email.id
-        JOIN PersonalRSAKeys sender_keys ON sender_keys.email_id = sender_email.id
-        JOIN PersonalRSAKeys recipient_keys ON recipient_keys.email_id = recipient_email.id
+            pub.public_key_encrypt AS recipient_public_key_encrypt,
+            prk.private_key_sign AS sender_private_key_sign
+        FROM PublicRSAKeys pub
+        JOIN Emails sender ON pub.current_sender_email_id = sender.id
+        JOIN Emails recipient ON pub.recipient_email_id = recipient.id
+        JOIN PrivateRSAKeys prk ON prk.sender_email_id = sender.id
         WHERE 
-            sender_email.email = :sender_email
-            AND recipient_email.email = :recipient_email
-            AND sender_keys.create_date <= :date_limit
-            AND recipient_keys.create_date <= :date_limit
-        ORDER BY pk.create_date DESC
-        LIMIT 1;
+            sender.email = :sender_email 
+            AND recipient.email = :recipient_email 
+            AND pub.create_date <= :date_limit
+            AND prk.create_date <= :date_limit
+        ORDER BY pub.create_date DESC
+        LIMIT 1
         """
         row = await self.database.fetch_one(query, {
             "sender_email": current_sender_email,
@@ -244,6 +255,12 @@ class RSAKeyDatabase:
 
         raise HTTPException(status_code=404, detail="Ключи не найдены.")
 
+    async def get_emails(self):
+        """Возвращает список всех email из таблицы Emails."""
+        query = "SELECT email FROM Emails"
+        rows = await self.database.fetch_all(query)
+        return [row["email"] for row in rows] if rows else []
+
     def get_current_date(self):
         """Возвращает текущую дату и время."""
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -252,46 +269,58 @@ import asyncio
 import base64
 
 if __name__ == "__main__":
+    import base64
+
     async def main():
-        db = RSAKeyDatabase("sqlite:/..//rsa_keys.db")
+        # Инициализация базы данных
+        db = RSAKeyDatabase("sqlite:///rsa_keys.db")
         await db.connect()
         await db.create_tables()
 
-        # Пример использования
-        first_email = "donntu_test@mail.ru" # modex.modex@mail.ru
-        double_email = "modex.modex@mail.ru"
+        # Пример данных для тестирования
+        first_email = "donntu_test@mail.ru"
+        second_email = "modex.modex@mail.ru"
 
-        private_key_sign_base64 = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBcUpHYXE4d2dBbDB3VjhPRVZRWFc2VWNHQlMwU1ZGcUhkVk1iVXA1elhSV0VXOUVJCmhGeWkwREdSeTRrdjZaYllBbGhCUTJsbWJKVHkvZ1czMEZIWEdGU3h3M2NLNlBxTUhueEtSUENxMzVqV3Zad0EKNmNkQkxoMTU3Y0JoOGwvZzdkdjJUVGhoMFpTVUlhZjNmZnFtTlBhOEV3TE96UXNSOXVEN2dMaHJTaTFVQWprSwoyNlJjSjliSFZqbnY2eGkzOTVCZkYybDAyUlV6MWVyUUdGSTQ4eHRUZlRIdlBCcitwVjRJTTJxU3RxbFRsR3EvClZLRFIvenlSL1AwckE3OUpPYmxHVzRyeUpCQzNRYm1hVis1aTFRSlBQVjV0YWNoM0FmMEhwbkREUWV6VHVFNFMKWEVKQlFhbnZTS3hvQTI2ZHk1clVteUxITkFPWWN1L2pyZUlFSHdJREFRQUJBb0lCQUVJK1dneWFYcGZmUEVDNQpGbmQ5SUh3ekM0UWNOc0JNaFVBUGhVUzkvUEwvSWpFYzM5NTRNd2xpK1hzRmNmMDNhTExmTU9LSGVKZENINDNBCi9IL1NzWmNmclczMWlhV04xR09rajJFeFBNMDYyR1RSK2kva3ZGSWRoazF1MVc3MHk4VmR0QmliaUNGZTVLbW4KUXVUUWkrRnpkdXgzcFlKQmovRTNiODZoYXBST3dOUlpmN1Y5Ti94OXRyeXNudnFpQ2t1MjdUdmEyYWNka0gyLwpOWUFDUlRJc3pMeHRtb1R2SHB0MnhkSXJOOFlJR2twcUpCSzlkaGhqdXBEd2tyV0ZZV1FLajBkWW5SejgxWkN2CnpyMGM5SFFlWmZUYjZHVklMdjJyb3VzMS8za3RWRHJkVEdvUnozQW1wYmozYUhZWkl4b21DT0xnNXozakxkZVoKa0dya0Eya0NnWUVBdkprM1RlNmg2dkxpNUQ4Lzc5TDlBM0lTUmlHM2piNm9mNFF1QlV0b0VZQXNNZFZFWlNMWAoyaCtMZkQ5d29VNUIzNUlwcitTVnNRNmMwalpyVFZrNlNLdUwrQUdEZFRINWtQNEhWdStzNnpYWTdjVVVHTi9CCkZjeTJBR2JCbVZ4ei84VXFiS1E1NGFHRzRtQzVTUTdJdFZVZ3lSQTcvZldNSllUcU1ySy96N2NDZ1lFQTVNL2cKcnBGTndNRXh2ZElmbnkweUhabUl6YXZhejQrR2xrd2YxUDNrTVdvVDNadi9HcDI1K0ZrM3hKakZlYWgxY2d1awpwajVralBib2FUbnY2Q2Jnekk0VC9GVW1WNTZ6QU5yaFZIcmhvbzFKTjhUY0R1WEhnS1BQSVlxbkVoYWJmK1pyCnRHV0lpanFTOGtWS1FYb3RIWFNESVVIazY5RkVOTFprMWtHb250a0NnWUJWa285dFpPRkM0WUhoWG5GOE41ZGwKZ05TWnphS2pSZWJlTlBOTW83Sk1mb09PK04xWHBqK2FVTVhSVWxlZ1dRbTZqMjhxeCtURHVZV2VPK0xqN2FCcwphS25SbFo0NEJyemQ5T1VQcFNBb2VQNDhwRGRDTWdSQ0IraHN0ak1SaXNsM085Yk1CSmZlc0pPckU0ZitoaDY3CmFDekFEZ1dxYlVkeG5xVkU2NlhzY1FLQmdFOHVIS3RzUHdMZ0dDMS9CRkJhSElpZnMvYXdiT1Q4M3U4dDRxb2IKUGhkWGhRNWdTRlJXbHA5NWlGSHhLQTBrblpmY3JacVY1c2ZkUGFvRVVaLzlyRGM5UjI4L3JDZ1FGQlBNcXNOSQpUc0tvcjlpcnVCY3pydWsyUnB4dDFjanRwOXdIeWVmQVp4S21tR2xjVHdqL2xaTW0yYVh0bnFGNFptanpZVXUvCnB2RnBBb0dCQUxMWWM5blhIRXdDYTNid1RMKzJld2orNmlzbG1iYWd0cURUL0VrY1NwSk8yRTEyeXdmSUQ2R1UKdm1MZnk0YjAvZzNJMUVtSVVyLzVoNmVOT3VSUVlMZjVZaFV0U0dGOHdHTW5kNCtlK1cwRFMvbXQ5cDZEbkwzUApMU3g5RVB0MnkxWTB0SnRvRDZ4NFlGVVgzM1I4WlVlaEh0VEcxMTBMdGpxME01NDd4Q2xtCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0t"
-        public_key_sign_base64 = "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFxSkdhcTh3Z0FsMHdWOE9FVlFYVwo2VWNHQlMwU1ZGcUhkVk1iVXA1elhSV0VXOUVJaEZ5aTBER1J5NGt2NlpiWUFsaEJRMmxtYkpUeS9nVzMwRkhYCkdGU3h3M2NLNlBxTUhueEtSUENxMzVqV3Zad0E2Y2RCTGgxNTdjQmg4bC9nN2R2MlRUaGgwWlNVSWFmM2ZmcW0KTlBhOEV3TE96UXNSOXVEN2dMaHJTaTFVQWprSzI2UmNKOWJIVmpudjZ4aTM5NUJmRjJsMDJSVXoxZXJRR0ZJNAo4eHRUZlRIdlBCcitwVjRJTTJxU3RxbFRsR3EvVktEUi96eVIvUDByQTc5Sk9ibEdXNHJ5SkJDM1FibWFWKzVpCjFRSlBQVjV0YWNoM0FmMEhwbkREUWV6VHVFNFNYRUpCUWFudlNLeG9BMjZkeTVyVW15TEhOQU9ZY3UvanJlSUUKSHdJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t"
-        private_key_encrypt_base64 = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBbENaK3dJY3I1ZW44K2UxSU80NzhMQVVsVEc1VmdwNFIvQ2ltWUtCUkl6K1RsTXhOCjNPYU9xNFIxQUJRTWNwNEdEbUVLMXFzdGh4WllPVFIrdC9GU0s5VHYyQVVTSDliL1c5Ui95WmR0QTlrdisvVFMKM3hEd3daMDBMOXJzajQ0Sm52R1l6WlpVeDBod29WSXZXVVFwWU01ZTE5UFo3QnpsOTF3MC9RaGtHVkZaVVhXZApSUmFBQ3hjQTEwWG1uYTR0NHVuYzlvMzdFWE81OFBjb1h1M1pYSGZWRnRTRTZvQzFaNFlLZkxXYnBnRWYza0pBCjk2dVMxQk1OMkdrV1FWUytlR1ROdEl5aHdHei9KY0M4VndYcURLUjRMSDRDY28vSk93WlVFV1d1bDhhSGJZdm0Kb0ZIb0ZMM0JtcUNEZzYxa0JQOTBLcFpNdjRxanBVdFRoSjhWZHdJREFRQUJBb0lCQUR6SXdvNnBweGd3OWN0eApVSWFuTnMyMDJzWE9LeVZwUjRYSEErUjNRbk1NM2JkYVQ4UUhrSmZNdzloaFlXNFJhZml5VmlrWG1KbHBVSTgvCis1SHE0RVQ5bTk1c3ppL2tIV2VHKzFzeDF0ZVNYNzZuaDNGZ1dQZUhVV2NsRXBRZnVkRE4zVnpVaGpveGZZeWkKMUt4eWErdTlJR3E3RUJseERlVjhubjBHMlZNTlRxS0NlSk84Y0JyNm9VZmxMYzB0K2Jnamhad2JGVE54NVlGSApMc1hhR1lVNFBWTlhKNFp2cFdOZ3oxdGV3K3BZdUhEWVFMQW5hUTRPUWhmdmFWMVN0bkxaK0dOWTdna2Z6NzZqCkJPZmV1azBMd2UrRndHeFZ4bUlUSjdLaC9lZUYydThYNFh2TVVqOEFSYXV5SmhHbVZ5T0t2N1lBTW9EamhQSkcKalloR2VPa0NnWUVBd2toZUd3aS8vUEpwaVoxcXhKYzVYY2pnamlwYzBidUxjQ2cvNkM2MmxJWWFzUGpMT05CZQpDUHFYWUNoS0RhSVU3b3ZwdFEwRHBrYXA2UXB0VU5jY2pSQXFGV2d1QWxZRHg3SDdTWHJqRVE4dVh4LzFHNDdxCis0Tk1mRXRQR2htSnpPMStuNTFLWlNKNlZkbUZZTmM1Y3kyT2t3c1gxeERSdTA4dnlFVG1oUXNDZ1lFQXd6YUQKZ29Uem1wYmR6eGlwcURsNFRHUndEb2NIRTlCZXhkaDV0WDNaSjJ6VWZJVXlmQmwxTmFDQTdIVlNmbWFER3liNwpmS2EwMG82QXF2VTJrVklURUpNZHBFT1BYVm4vdUVmd3luZy96c2JQK1FKb1ppYUxGT0JSRnZIejRiMFE2M2NhCnI3dHlGYjNpcjF4TnFlTXUzSFdEVEtSTVNtMzBDcTNmbXB0NG5NVUNnWUJSalhzak1mc1ZQTlNjVlozWncvanEKcTBYSHAzU3EvV1M4d2NpQnVBb2dNbUxGNHNtN29ZdTNqU2s1emUrMzVVK1FDdDhoaHNML2F5NHJpcHIwa2plRAo1ME1qRlVZcTZOeFJXUjY0YTRNaFNCUVpEaHNmWkZDekh4eGVHR2F0K0FabUpWTS93UkRYZnkrSEZmWHMvcXM0CjgraWpSTWJQR2xwUG5CL2NteitBblFLQmdRRENWbFBIck1uQy9Td21EbnhmajQ3MkpncjBPM0pOUkdRRS9BUDIKTFNud3VNUTBqbmw2MS9FNmlPV3dBUUExKzZITGR4eG50S0pROXpLYWZ2RnE3RlUwYS9EWFpiYWtqWU1wRnQxZApBeWNxbC92VS9wT21GZnJodG9xam1BMWRqbFg0dzZLYWpiWCtkUUhsNTdNZFRLQ0xNcVdhdC9tSEl6MFBJSmQ1CkdBdVRyUUtCZ0dBTFlWbEo4TDJqcE91M29VREJLaXl0NlVTaEdTNm15VHVSaGtKa2RjaklvYVM4NUxxZTh2QncKcit5NzUxU3pzcS9QUGU5K1JWSEdhR284MjdCTkpNenRRTGVjRU5BTmlZU2xQbEhQMkRzOWtMWi9iOS9IVE53RAo5ZnRNUFlKSDl6bkpySWNuZ3RFK0swbG80SkJBZnFQdXByUzFJVnk5MUkvQ0FNTk0yWHFyCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0t"
-        public_key_encrypt_base64 = "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFsQ1ord0ljcjVlbjgrZTFJTzQ3OApMQVVsVEc1VmdwNFIvQ2ltWUtCUkl6K1RsTXhOM09hT3E0UjFBQlFNY3A0R0RtRUsxcXN0aHhaWU9UUit0L0ZTCks5VHYyQVVTSDliL1c5Ui95WmR0QTlrdisvVFMzeER3d1owMEw5cnNqNDRKbnZHWXpaWlV4MGh3b1ZJdldVUXAKWU01ZTE5UFo3QnpsOTF3MC9RaGtHVkZaVVhXZFJSYUFDeGNBMTBYbW5hNHQ0dW5jOW8zN0VYTzU4UGNvWHUzWgpYSGZWRnRTRTZvQzFaNFlLZkxXYnBnRWYza0pBOTZ1UzFCTU4yR2tXUVZTK2VHVE50SXlod0d6L0pjQzhWd1hxCkRLUjRMSDRDY28vSk93WlVFV1d1bDhhSGJZdm1vRkhvRkwzQm1xQ0RnNjFrQlA5MEtwWk12NHFqcFV0VGhKOFYKZHdJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t"
+        # Приватные и публичные ключи в формате base64
+        private_key_sign_base64 = "<PRIVATE_KEY_SIGN_BASE64>"
+        public_key_sign_base64 = "<PUBLIC_KEY_SIGN_BASE64>"
+        private_key_encrypt_base64 = "<PRIVATE_KEY_ENCRYPT_BASE64>"
+        public_key_encrypt_base64 = "<PUBLIC_KEY_ENCRYPT_BASE64>"
 
-        private_key_sign = base64.b64decode(private_key_sign_base64.encode("utf-8"))
-        public_key_sign = base64.b64decode(public_key_sign_base64.encode("utf-8"))
-        private_key_encrypt = base64.b64decode(private_key_encrypt_base64.encode("utf-8"))
-        public_key_encrypt = base64.b64decode(public_key_encrypt_base64.encode("utf-8"))
+        # Декодирование ключей из base64
+        private_key_sign = base64.b64decode(private_key_sign_base64)
+        public_key_sign = base64.b64decode(public_key_sign_base64)
+        private_key_encrypt = base64.b64decode(private_key_encrypt_base64)
+        public_key_encrypt = base64.b64decode(public_key_encrypt_base64)
 
+        # Вставка персональных ключей
         await db.insert_personal_keys(first_email, private_key_sign, public_key_sign, private_key_encrypt, public_key_encrypt)
-        await db.insert_personal_keys(double_email, private_key_sign, public_key_sign, private_key_encrypt, public_key_encrypt)
+        await db.insert_personal_keys(second_email, private_key_sign, public_key_sign, private_key_encrypt, public_key_encrypt)
 
-        await db.insert_public_keys(first_email, double_email, public_key_sign, public_key_encrypt)
-        await db.insert_public_keys(double_email, first_email, public_key_sign, public_key_encrypt)
+        # Вставка публичных ключей
+        await db.insert_public_keys(first_email, second_email, public_key_sign, public_key_encrypt)
+        await db.insert_public_keys(second_email, first_email, public_key_sign, public_key_encrypt)
 
-        # Получение данных
-        public_keys = await db.get_public_keys(first_email, double_email)
-        print(f"Публичные ключи для {first_email} к {double_email}:")
-        for key in public_keys:
+        # Получение публичных ключей
+        public_keys_1_to_2 = await db.get_public_keys(first_email, second_email)
+        print(f"Публичные ключи для {first_email} к {second_email}:")
+        for key in public_keys_1_to_2:
             print(f"Подпись: {key['public_key_sign']}, Шифрование: {key['public_key_encrypt']}")
 
+        public_keys_2_to_1 = await db.get_public_keys(second_email, first_email)
+        print(f"Публичные ключи для {second_email} к {first_email}:")
+        for key in public_keys_2_to_1:
+            print(f"Подпись: {key['public_key_sign']}, Шифрование: {key['public_key_encrypt']}")
+
+        # Получение списка всех e-mail
         emails = await db.get_emails()
-        print(emails)
+        print("Список e-mail:")
+        for email in emails:
+            print(email)
 
-        # Получение данных
-        public_keys = await db.get_public_keys(double_email, first_email)
-        print(f"Публичные ключи для {double_email} к {first_email}::")
-        for key in public_keys:
-            print(f"Подпись: {key['public_key_sign']}, Шифрование: {key['public_key_encrypt']}")
-
+        # Завершение работы с базой данных
         await db.disconnect()
 
+    import asyncio
     asyncio.run(main())
+
