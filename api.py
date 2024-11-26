@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import base64
 
+import grpc
 import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File
 from pydantic import BaseModel
@@ -83,12 +84,6 @@ class SendEmailRequest(BaseModel):
     private_key_sign: Optional[str] = None
     public_key_encrypt: Optional[str] = None  # Ключи для шифрования
 
-
-class SendEmailResponse(BaseModel):
-    message: str
-
-
-
 # API для авторизации под другим Email
 # Модели данных для смены учетной записи
 class ChangeAccountRequest(BaseModel):
@@ -147,9 +142,6 @@ class SummaryEmailResponse(BaseModel):
     sender: str
     subject: str
     date: str
-
-
-
 
 # Модели данных
 class FetchEmailsRequest(BaseModel):
@@ -341,16 +333,25 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
                         decrypted_attachments = [
                             {"filename": att.filename, "content": att.content} for att in decrypted_email.attachments
                         ]  # Вложения
+
+                        break
+
+                    except grpc.RpcError as e:
+                        # Обрабатываем ошибки gRPC
+                        if e.code() == grpc.StatusCode.INVALID_ARGUMENT:
+                            continue
+                        else:
+                            raise HTTPException(status_code=500, detail=f"Server error: {e.details()}")
+
                     except Exception as e:
                         raise HTTPException(status_code=400, detail=f"Failed to decrypt email: {e}")
 
-            else:
-                # Если JSON-структура не содержит нужных ключей, возвращаем тело как есть
-                decrypted_body = base64.b64decode(encrypted_body).decode("utf-8")  # Декодируем тело из Base64
-                decrypted_attachments = [
-                    {"filename": att["filename"], "content": base64.b64decode(att["content"])}
-                    for att in encrypted_attachments
-                ]
+            if not decrypted_body:
+                # Если тело не является JSON, возвращаем как есть
+                decrypted_body = encrypted_body
+                decrypted_attachments = [{"filename": att["filename"], "content": att["content"]} for att in
+                                         encrypted_attachments]
+
         except json.JSONDecodeError:
             # Если тело не является JSON, возвращаем как есть
             decrypted_body = encrypted_body
@@ -398,14 +399,76 @@ async def get_attachment(filename: str):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
 
+# API для генерации ключей и отправки по почте
+class KeyGenerationResponse(BaseModel):
+    private_key_sign: str
+    public_key_sign: str
+    private_key_encrypt: str
+    public_key_encrypt: str
+
+@app.post("/generate-keys/")
+async def generate_and_send_keys(to_email: str = Form(...)):
+    # Генерация новых ключей
+    keys = secure_email_client.generate_keys()
+
+    # Кодирование публичных ключей в BASE64
+    keys_base64 = {
+        "public_key_sign": base64.b64encode(keys["public_key_sign"]).decode(),
+        "public_key_encrypt": base64.b64encode(keys["public_key_encrypt"]).decode()
+    }
+
+    # Формирование тела письма
+    email_body_data = {
+        "public_key_sign": keys_base64["public_key_sign"],
+        "public_key_encrypt": keys_base64["public_key_encrypt"],
+    }
+
+    body = json.dumps(email_body_data, ensure_ascii=False)
+
+    current_date = db.get_current_date()
+
+    # test_inserts = {
+    #     "sender_email": to_email,
+    #     "current_recipient_email": imap_client.email_user,
+    #     "private_key_sign": keys["private_key_sign"],  # Уже байты
+    #     "private_key_encrypt": keys["private_key_encrypt"],  # Уже байты
+    #     "public_key_sign": keys["public_key_sign"],  # Уже байты
+    #     "public_key_encrypt": keys["public_key_encrypt"],  # Уже байты
+    #     "create_date": current_date,
+    # }
+
+    await db.insert_private_keys(
+        sender_email=to_email,
+        current_recipient_email=imap_client.email_user,
+        private_key_sign=keys["private_key_sign"],  # Уже байты
+        private_key_encrypt=keys["private_key_encrypt"],  # Уже байты
+        public_key_sign=keys["public_key_sign"],  # Уже байты
+        public_key_encrypt=keys["public_key_encrypt"],  # Уже байты
+        create_date=current_date
+    )
+
+    send_response = await send_email(
+        to_email=to_email,
+        subject=f"Public RSA Keys <{current_date}>",
+        body=body,
+        from_name="Sender",
+        to_name="Recipient",
+        use_encrypt=False
+    )
+
+    # Возврат успешного ответа
+    return {"message": "Keys generated and email sent successfully", "email_status": send_response}
+
 # API для отправки письма на указанную почту
-@app.post("/emails/send/", response_model=SendEmailResponse)
+class SendEmailResponse(BaseModel):
+    message: str
+@app.post("/emails/sent/", response_model=SendEmailResponse)
 async def send_email(
     to_email: str = Form(...),
     subject: str = Form(...),
     body: str = Form(...),
-    from_name: Optional[str] = Form(None),
-    to_name: Optional[str] = Form(None),
+    from_name: str = Form(None),
+    to_name: str = Form(None),
     attachments: Optional[List[UploadFile]] = File(None),
     use_encrypt: Optional[bool] = Form(True)
 ):
@@ -414,13 +477,14 @@ async def send_email(
 
         # Преобразуем вложения в байтовый формат
         file_attachments = []
-        if attachments:
+        if isinstance(attachments, list) and attachments:
             for file in attachments:
-                content = await file.read()
-                file_attachments.append({
-                    "filename": file.filename,
-                    "content": content,  # Оставляем в байтовом формате
-                })
+                if file is not None:
+                    content = await file.read()
+                    file_attachments.append({
+                        "filename": file.filename,
+                        "content": content,
+                    })
 
         # Проверяем, нужно ли шифрование
         if use_encrypt:

@@ -214,7 +214,7 @@ class RSAKeyDatabase:
                 for row in rows
             ]
 
-        raise HTTPException(status_code=404, detail="Ключи не найдены.")
+        raise HTTPException(status_code=404, detail="Для этой почты не было найдено ключей.")
 
     async def get_encrypt_sign_keys(
             self, current_sender_email: str, recipient_email: str, date_limit: str = None
@@ -253,7 +253,7 @@ class RSAKeyDatabase:
                 "private_key_sign": row["sender_private_key_sign"],
             }
 
-        raise HTTPException(status_code=404, detail="Ключи не найдены.")
+        raise HTTPException(status_code=404, detail="Для этой почты не было найдено ключей.")
 
     async def get_emails(self):
         """Возвращает список всех email из таблицы Emails."""
