@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import base64
 from datetime import datetime
+from io import BytesIO
 
 import grpc
 import uvicorn
@@ -230,6 +231,52 @@ async def authorize_account(credentials: AccountCredentials):
 
 # Глобальный массив для хранения вложений
 global_attachments = []
+
+global_keys_file = None
+
+@app.get("/keys/export/")
+async def export_public_keys():
+    """
+    Экспорт всех публичных ключей в файл и отправка его
+    """
+    global global_keys_file
+
+    file_obj = await db.export_keys_to_file()
+
+    # Генерируем временное имя файла
+    temp_dir = "rsa_keys"
+    file_name = "exported_public_keys.json"
+    os.makedirs(temp_dir, exist_ok=True)
+    file_path = os.path.join(temp_dir, file_name)
+
+    # Сохраняем файл на диск (для последующего API-запроса на скачивание)
+    with open(file_path, "wb") as f:
+        f.write(file_obj.read())
+
+    # Добавляем файл в global_attachments
+    global_keys_file = file_path
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, filename=file_name)
+
+@app.post("/keys/import/")
+async def import_public_keys(file: UploadFile = File(...)):
+    """
+    Импорт публичных ключей из загруженного файла.
+    """
+    # Читаем файл в памяти
+    file_content = await file.read()
+    file_obj = BytesIO(file_content)
+
+    try:
+        result_message = await db.import_keys_from_file(file_obj)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON file format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"message": result_message}
 
 # Если почта может быть без угловых скобок, оставляем только email
 def extract_email(sender):

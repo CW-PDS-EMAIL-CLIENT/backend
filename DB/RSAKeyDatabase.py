@@ -1,4 +1,8 @@
+import io
+import json
 from datetime import datetime
+from io import BytesIO
+
 from databases import Database
 from fastapi import HTTPException
 
@@ -17,8 +21,8 @@ class RSAKeyDatabase:
         await self.database.disconnect()
 
     async def create_tables(self):
-        """Создаёт таблицы, если они ещё не существуют."""
-        # Таблица для хранения email-адресов
+        """Создает таблицы с уникальными ограничениями для ключей и email-адресов."""
+        # Создаем таблицу Emails
         await self.database.execute("""
         CREATE TABLE IF NOT EXISTS Emails (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +30,7 @@ class RSAKeyDatabase:
         )
         """)
 
-        # Таблица для хранения личных RSA-ключей
+        # Создаем таблицу PrivateRSAKeys
         await self.database.execute("""
         CREATE TABLE IF NOT EXISTS PrivateRSAKeys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +41,7 @@ class RSAKeyDatabase:
             private_key_encrypt BLOB NOT NULL,
             public_key_encrypt BLOB NOT NULL,
             create_date DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            UNIQUE (sender_email_id, current_recipient_email_id, private_key_sign, private_key_encrypt),
             FOREIGN KEY (sender_email_id) REFERENCES Emails (id) 
                 ON DELETE CASCADE 
                 ON UPDATE CASCADE,
@@ -46,7 +51,7 @@ class RSAKeyDatabase:
         )
         """)
 
-        # Таблица для хранения публичных RSA-ключей
+        # Создаем таблицу PublicRSAKeys
         await self.database.execute("""
         CREATE TABLE IF NOT EXISTS PublicRSAKeys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +60,7 @@ class RSAKeyDatabase:
             public_key_sign BLOB NOT NULL,
             public_key_encrypt BLOB NOT NULL,
             create_date DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            UNIQUE (current_sender_email_id, recipient_email_id, public_key_sign, public_key_encrypt),
             FOREIGN KEY (current_sender_email_id) REFERENCES Emails (id) 
                 ON DELETE CASCADE 
                 ON UPDATE CASCADE,
@@ -287,6 +293,107 @@ class RSAKeyDatabase:
     def get_current_date(self):
         """Возвращает текущую дату и время."""
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    async def export_keys_to_file(self):
+        """Экспорт всех ключей в JSON-файл с использованием email-адресов и возврат файла в памяти."""
+        # Получение публичных ключей
+        public_query = """
+        SELECT 
+            pub.create_date, 
+            sender.email AS sender_email, 
+            recipient.email AS recipient_email, 
+            pub.public_key_encrypt AS public_key_encrypt, 
+            pub.public_key_sign AS public_key_sign
+        FROM PublicRSAKeys pub
+        JOIN Emails sender ON pub.current_sender_email_id = sender.id
+        JOIN Emails recipient ON pub.recipient_email_id = recipient.id
+        """
+        public_rows = await self.database.fetch_all(public_query)
+        public_keys = [
+            {key: (value.decode("utf-8") if isinstance(value, bytes) else value)
+             for key, value in dict(row).items()}
+            for row in public_rows
+        ]
+
+        # Получение приватных ключей
+        private_query = """
+        SELECT 
+            priv.create_date, 
+            sender.email AS sender_email, 
+            recipient.email AS recipient_email, 
+            priv.private_key_encrypt AS private_key_encrypt, 
+            priv.private_key_sign AS private_key_sign,
+            priv.public_key_encrypt AS public_key_encrypt,
+            priv.public_key_sign AS public_key_sign
+        FROM PrivateRSAKeys priv
+        JOIN Emails sender ON priv.sender_email_id = sender.id
+        JOIN Emails recipient ON priv.current_recipient_email_id = recipient.id
+        """
+        private_rows = await self.database.fetch_all(private_query)
+        private_keys = [
+            {key: (value.decode("utf-8") if isinstance(value, bytes) else value)
+             for key, value in dict(row).items()}
+            for row in private_rows
+        ]
+
+        # Формируем JSON с двумя массивами
+        data = {
+            "public_keys": public_keys,
+            "private_keys": private_keys,
+        }
+
+        # Создаем JSON-строку и записываем ее в BytesIO
+        file_obj = io.BytesIO()
+        json_data = json.dumps(data, ensure_ascii=False, indent=4)
+        file_obj.write(json_data.encode("utf-8"))  # Кодируем строку в байты
+        file_obj.seek(0)  # Сбрасываем указатель на начало файла
+
+        return file_obj
+
+    async def import_keys_from_file(self, file_obj):
+        """Импорт ключей из JSON-файла с использованием email-адресов."""
+        # Загружаем содержимое файла
+        file_obj.seek(0)
+        data = json.load(file_obj)
+
+        added_public_count = 0
+        added_private_count = 0
+
+        # Импорт публичных ключей
+        for key in data.get("public_keys", []):
+            try:
+                await self.insert_public_keys(
+                    current_sender_email=key["sender_email"],
+                    recipient_email=key["recipient_email"],
+                    public_key_sign=key["public_key_sign"].encode("utf-8") if key.get("public_key_sign") else None,
+                    public_key_encrypt=key["public_key_encrypt"].encode("utf-8") if key.get(
+                        "public_key_encrypt") else None,
+                    create_date=key.get("create_date"),
+                )
+                added_public_count += 1
+            except Exception as e:
+                print(f"Ошибка при добавлении публичного ключа: {e}")
+
+        # Импорт приватных ключей
+        for key in data.get("private_keys", []):
+            try:
+                await self.insert_private_keys(
+                    sender_email=key["sender_email"],
+                    current_recipient_email=key["recipient_email"],
+                    private_key_sign=key["private_key_sign"].encode("utf-8") if key.get("private_key_sign") else None,
+                    public_key_sign=key["public_key_sign"].encode("utf-8") if key.get("public_key_sign") else None,
+                    private_key_encrypt=key["private_key_encrypt"].encode("utf-8") if key.get(
+                        "private_key_encrypt") else None,
+                    public_key_encrypt=key["public_key_encrypt"].encode("utf-8") if key.get(
+                        "public_key_encrypt") else None,
+                    create_date=key.get("create_date"),
+                )
+                added_private_count += 1
+            except Exception as e:
+                print(f"Ошибка при добавлении приватного ключа: {e}")
+
+        return f"Импортировано {added_public_count} публичных ключей и {added_private_count} приватных ключей."
+
 
 if __name__ == "__main__":
 
