@@ -265,62 +265,110 @@ class RSAKeyDatabase:
         """Возвращает текущую дату и время."""
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-import asyncio
-import base64
-
 if __name__ == "__main__":
+
+    import asyncio
     import base64
 
-    async def main():
-        # Инициализация базы данных
-        db = RSAKeyDatabase("sqlite:///rsa_keys.db")
-        await db.connect()
-        await db.create_tables()
+    async def insert_test_data(db, sender_email, recipient_email, keys_base64_str):
+        current_date = db.get_current_date()
 
-        # Пример данных для тестирования
-        first_email = "donntu_test@mail.ru"
-        second_email = "modex.modex@mail.ru"
+        # Генерация тестовых ключей
+        private_key_sign = base64.b64decode(keys_base64_str["private_key_sign_base64_str"])
+        public_key_sign = base64.b64decode(keys_base64_str["public_key_sign_base64_str"])
+        private_key_encrypt = base64.b64decode(keys_base64_str["private_key_encrypt_base64_str"])
+        public_key_encrypt = base64.b64decode(keys_base64_str["public_key_encrypt_base64_str"])
 
-        # Приватные и публичные ключи в формате base64
-        private_key_sign_base64 = "<PRIVATE_KEY_SIGN_BASE64>"
-        public_key_sign_base64 = "<PUBLIC_KEY_SIGN_BASE64>"
-        private_key_encrypt_base64 = "<PRIVATE_KEY_ENCRYPT_BASE64>"
-        public_key_encrypt_base64 = "<PUBLIC_KEY_ENCRYPT_BASE64>"
-
-        # Декодирование ключей из base64
-        private_key_sign = base64.b64decode(private_key_sign_base64)
-        public_key_sign = base64.b64decode(public_key_sign_base64)
-        private_key_encrypt = base64.b64decode(private_key_encrypt_base64)
-        public_key_encrypt = base64.b64decode(public_key_encrypt_base64)
-
-        # Вставка персональных ключей
-        await db.insert_personal_keys(first_email, private_key_sign, public_key_sign, private_key_encrypt, public_key_encrypt)
-        await db.insert_personal_keys(second_email, private_key_sign, public_key_sign, private_key_encrypt, public_key_encrypt)
+        # Вставка приватных ключей
+        private_keys_id = await db.insert_private_keys(
+            sender_email=sender_email,
+            current_recipient_email=recipient_email,
+            private_key_sign=private_key_sign,
+            public_key_sign=public_key_sign,
+            private_key_encrypt=private_key_encrypt,
+            public_key_encrypt=public_key_encrypt,
+            create_date=current_date,
+        )
+        print(f"Приватные ключи добавлены с ID: {private_keys_id}")
 
         # Вставка публичных ключей
-        await db.insert_public_keys(first_email, second_email, public_key_sign, public_key_encrypt)
-        await db.insert_public_keys(second_email, first_email, public_key_sign, public_key_encrypt)
+        public_keys_id = await db.insert_public_keys(
+            current_sender_email=sender_email,
+            recipient_email=recipient_email,
+            public_key_sign=public_key_sign,
+            public_key_encrypt=public_key_encrypt,
+            create_date=current_date,
+        )
+        print(f"Публичные ключи добавлены с ID: {public_keys_id}")
 
         # Получение публичных ключей
-        public_keys_1_to_2 = await db.get_public_keys(first_email, second_email)
-        print(f"Публичные ключи для {first_email} к {second_email}:")
-        for key in public_keys_1_to_2:
-            print(f"Подпись: {key['public_key_sign']}, Шифрование: {key['public_key_encrypt']}")
+        public_keys = await db.get_current_public_keys(
+            current_sender_email=sender_email,
+            recipient_email=recipient_email,
+        )
+        print(f"Публичные ключи для {sender_email} -> {recipient_email}:")
+        for key in public_keys:
+            print(
+                f"Подпись: {key['public_key_sign']}, Шифрование: {key['public_key_encrypt']}"
+            )
 
-        public_keys_2_to_1 = await db.get_public_keys(second_email, first_email)
-        print(f"Публичные ключи для {second_email} к {first_email}:")
-        for key in public_keys_2_to_1:
-            print(f"Подпись: {key['public_key_sign']}, Шифрование: {key['public_key_encrypt']}")
+        # Получение приватного ключа для расшифровки и публичного ключа подписи
+        decrypt_keys = await db.get_decrypt_keys(
+            current_recipient_email=recipient_email,
+            sender_email=sender_email,
+        )
+        print(f"Ключи для расшифровки и подписи ({recipient_email} -> {sender_email}):")
+        for key in decrypt_keys:
+            print(
+                f"Приватный ключ для расшифровки: {key['private_key_encrypt']}, Публичный ключ подписи: {key['public_key_sign']}"
+            )
 
-        # Получение списка всех e-mail
+        # Получение ключей для шифрования и подписи
+        encrypt_sign_keys = await db.get_encrypt_sign_keys(
+            current_sender_email=sender_email,
+            recipient_email=recipient_email,
+        )
+        print(
+            f"Ключи для шифрования и подписи ({sender_email} -> {recipient_email}): "
+            f"Шифрование: {encrypt_sign_keys['public_key_encrypt']}, "
+            f"Подпись: {encrypt_sign_keys['private_key_sign']}"
+        )
+
+        # Получение списка e-mail
         emails = await db.get_emails()
         print("Список e-mail:")
         for email in emails:
             print(email)
 
+    async def main():
+        # Инициализация базы данных
+        db = RSAKeyDatabase("sqlite:/..//rsa_keys.db")
+        await db.connect()
+        await db.create_tables()
+
+        keys_base64_str_one = {
+            "private_key_sign_base64_str": b"LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBMTZaWmgyeHlZQnBqYkJMMTBGbkl3VGZ2ZGU1OC9ERE5JVXhlOVMranlTQlY5UzBDCkVBWjQ2SXpUZDlzVEhXQWdSMHplZFRSbW9pQjNvQ3dKb01oMWhpTVczekVoUTVMSWh1OVhNeXlCVTd4WXQzeTgKSFJaOC9XclRQeURndHdKRVNwZW53VzhWZkZEUnBLRmowRGNLdjRUV3ZORW5aelRHYmQ5R3dMdkFsdWRIU1FIdgpzMFhmQzNKS2U3NGpQc1RyMU5xeWtXVEF5bjlqMGxjQm1jdWxvUWxSOUlWOGltTXFEcG4zSHp3YWJQSGh2cGI5ClFwN0Fpb1RLbml4Q1pmekt6engyR29yY3k4TW1mQUlJTGp6VlY4czlEanB0bDRwWW1jcUFCQ0U2TlNZQ1c1TXEKVzloY0MzRjhpcG5UUFBwTStXUU5TYjEzcEtkeUlWWkRWcXZ6dVFJREFRQUJBb0lCQUF3b0lncnExNlhJUnd1TQpKQlJiUTJCMUZVZzZLZ3lUZWJUalY4VU5xdmVISGFGbEtLVWJvRXhIeUJJTkpRNDJZWXR6YjJUL0Q3d2JCWE5mCm1DbGFzNWxjdUFqYi9hcVFCMExvRWl2ZDJlcU5CeGxNN0ZQZGRTMWFETStWdkdWRXVQSFZpOHp4Uks1TjVndVkKVjRhZzI3ZkJOdFBOSEtJS1RSZGJpMk1KRW9uUEpHckxnR3VJRTNUUjArZmduOThrRFV3UmprZkdqVGdINzVhUQpWdnA5M3RrSld2RVJNY0xVK2FTL3dSa09yUHhOZXNWZnpRcnUzbnQzKzh1cGFDaDczNHFKUUw0S05QWEwzRXhlClNjNmJscllSc0RSSFZKbkxzdklucjloTm5YYlhNQ2ExRjF3ZldPblUrbXVRL29SNFhIWERaQ1VNOGtjY2dPWEoKMDVheVkyc0NnWUVBNUl0ZGNnNnk3RGw3VTYyMnRUZW9FOHc0eTQ0Njc5V3IrUWl1aVdJTURBaS96VnJmejQ0WApHWldaYXJUZ2pZZUxxYzBqTlpOOXQzY2pUUFBhR2EzeDdBNDQwMzMzYWpyRkdyV3I0d2VmbHBGcHJ1UTgrWDJnCm5aNml1NTJtbzg2cUFiNTBXM05aK0dVYUoyRitvZ2NxMHFZUXdDMzQ1SVIwRVFLTFUzaXZuWHNDZ1lFQThZNXMKOEM0NUpZeWVRU1FmV2wxMHZzMlNMdnZtT05xeEpOWlg4dnNHT0VmS1RJeFZhYUczUXRVaUdMWG0yLzZmd3JYKwpuTmhtRG13bGdBdTdVb3RZeVpkckkzQ3UwV1I4REJyNGpjb01EbFFvN0xjcnBTYSs5ZHJiSVVtRWVrNHYyZEUrCjlJVGZNQjVjMjhyT00rcEJkK1JDcEk4cTdtRXRZbzRoTnRyNUcxc0NnWUEzTWtGN1RubC8rOUlCUDY4a3pUQlcKdDdmdjBZWUNib1IrUE02S2Q1ZVpRSE95VVFSRXlIaGp3WEd3QjhkRDV6eWY0ZDlqRFNBTHMwWmZTM1dkUmhscgpmWFBVQUZSRTM3VEM0cVdFeTA2THVzcmZabGdqbVdlMUtaNzcyUE5xRkh1U3VFQzU1WDRSTTduQlVSYVlZMHJBClhVTW1adlA1bk5PN1YvWDJUdXQ3Q1FLQmdRRHZoS0pRcGdUVVR0SzlGT3hoMWpsazJNSVRCSVFMN0EycTBUNzAKR0NUYXVaVEd3b0FPOWVPWnlXeTl3K0RlVTJSbTFiOWFGdGxiZzdETGZ0YUh5dFNIVURWVU51K2hnVm5mUnY4ZQoyVEdMSTdoUXdHL3VtclRQWSt2VTNla1d2V0NGUXc2QnR4NzN2Nk9qN1R6NkRWWk5ZM0VSYTBUT2lsMU9WRkJxCjdFWUY4UUtCZ0VtSTZPYS9kYlM1N2hwSUFPUWVyVWZTby9hb21VQ21TaENseUFhZFA2V0RSVzFlSWR2Q1Rtcm0KTmlOSjF2QlVzamdBRUw0U1hFdm5LNjV3cXNpdGtuVnJoYkdMalRQbVZNVFlJcFdRalR6UEpZSWtvNDk0NE1QegpFOUVkWU9LSE9kQ0RVRTUyYTd5bmlza09wSWMxSGZjU2F6TTMvSlBCakNBSlkrT3RTTzUvCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0t",
+            "public_key_sign_base64_str": b"LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUExNlpaaDJ4eVlCcGpiQkwxMEZuSQp3VGZ2ZGU1OC9ERE5JVXhlOVMranlTQlY5UzBDRUFaNDZJelRkOXNUSFdBZ1IwemVkVFJtb2lCM29Dd0pvTWgxCmhpTVczekVoUTVMSWh1OVhNeXlCVTd4WXQzeThIUlo4L1dyVFB5RGd0d0pFU3BlbndXOFZmRkRScEtGajBEY0sKdjRUV3ZORW5aelRHYmQ5R3dMdkFsdWRIU1FIdnMwWGZDM0pLZTc0alBzVHIxTnF5a1dUQXluOWowbGNCbWN1bApvUWxSOUlWOGltTXFEcG4zSHp3YWJQSGh2cGI5UXA3QWlvVEtuaXhDWmZ6S3p6eDJHb3JjeThNbWZBSUlManpWClY4czlEanB0bDRwWW1jcUFCQ0U2TlNZQ1c1TXFXOWhjQzNGOGlwblRQUHBNK1dRTlNiMTNwS2R5SVZaRFZxdnoKdVFJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t",
+            "private_key_encrypt_base64_str": b"LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBb2R6Z1dWWk10Z3A3OFZDeHZPZUlrZ2o4eG1KdTkxcm0yZFNpZFdKVElKMkNBZGFSCk1lVnMzT1lmTGd4L3BqOXVHVmR5T3hYTnByNlRqWDNoM3FBREFyakZTdkRwVlFDWS85RTgwV1NqQUY3VmtFZTAKOFdjdUJRT1Z5cDdqQnNEa0FEakdITm5YaWtUVnVFR2tBR3Y1dml0OUd0TjZPRGxNKzF3UGtIRWxUK3V1ODVaUgorVFU2aWM3SHI1RWdtM3E5cFdFRm1rSU1UN0NkNHZaeW03Y2hzUSt6Y3VYcnF3QmxyN0grNVRyNGtYZDF4VkQrCjcrRnpTWnljZ21PZjUzalZQTXZzZ1ZTUFJ6VkE5Z0hWcVdxUHoxUFNrcm9SN0tkZkdpaCthbUxnWFp3dU05UUsKSUFERjg4b0lhblhIT3JHS2wxelhVMnV0RytnSW9OMmZwdUF0bVFJREFRQUJBb0lCQUJQUXJXcGlaVHUzNXRwdwo3WUZadXQ5ZDJFd1ZDczZmUXptUmpWM2ZicHZFaklEYkdxVklGOTZuRVZRYTFabXRsRFhuL2FUOEUxUUJhcURjCnMwVUV3N21Xa3hpTWk1UUxZYStYbHVGdmQ0RDVHeDN4bVZZZ01vTU1vRTdReXF3dCt2dUg5OERhYmtlUUM3WGwKMjBUdDh3SHo0dm5ndjhxWVFUTllYdE5vOW85azhldXhqUDhMZFZvL3g0RTFabUpSVkJaeTY3ay9VWVhXeDFuMQpScXJWbTNtNWpjZW51YVpySzRicHNMeFZ6TlJ1emxWSTRQb0VPeis0aHdaTnhGSlJGSlZtUThNVFIzc2MwbS8yCjRzQk5adGNmYy90MGc2Lzk4cERUKzkxbURKQUdRTXVwTXdWTDNXWmsvY0tpdys2eXZmUVczUnVmejlNZDJRcDkKNUhwTWI0RUNnWUVBdlpvVnV3dXFiNjJVZDZZd2MwcnpTQ2gzUFRJVlBKQjZiSkhYM2VMU0xvQkgvSUF0RTc1Twpzc0FHMGhidFY5bDFkUHVRdUlJeVE5NUtINXVwZGsxVlZ2R2FIVDM3UHljV1dtYWNORlBYandQWEVmc2pJOGkxCmtuSmxROFlBSFV1WlRIK2RtWXZQR3Z1bU9nSU4yVXpucDhVWFdQaXJWRlBSdjBFM05uU0tZb2tDZ1lFQTJvdjMKVklIL0xsd01Ud3hBbjBpd1dqYW1wSERpZVB1N1oxQmx2NUpPK0tMaUZqQUltcmhPZDB3SlFIWG1kbzkrOXB0QgpCRUVKdTM5KzBReDdPQzUzbzN2RGg0M3F6QU5FRm82V3h5dmxyRUROL01ZbzUrOGR1Q1U5Z3VieS9SUEZwOHNQCkk1R0VjcFJCS0MxOGpsRWhJbU5WRHZxbGJ3NUxzaTV6R25rTDdwRUNnWUVBclVtNDlyMVF4c1ZFM3A0N3hnUUkKbWppeDBuS0Z5bGJhTFlTV1lTdS9vZFNJOXBSSG5yWGV3NnlTRDAzNUdzT2JnSkd6MFk3ZFZmNUNqT1QrV3l1UApCZW5IUzFhczNTbGlXcmxScHRuQ04rbndsWFNNeDFYWDdjTTBIbDlIRjM5UzJ3SUFEcWdqWDZ3RVh4d2xnQ2V6CnlqaHVnRmkyYmxvMVo3RzVQc0lCQU5FQ2dZQVVxVzcwdW1XWnlISVJkeU1VN0JaZ01SS0lNWFAzNURUUGk3WlMKNms0MUM1RThiOFlnZXBSUWl3dkU0R0N0ak51QURTV1VkV0dxTEYrYy9BVWFScXBnOW02Qi9sVFlmT2FQQzJRTgo2SVNLU0lZeEE3c1NVblVJMTl4ODU4REpWSGszWitkQ2dadDRDYlF2VEQyZVp1VXZEeDBYa1hMYWtRdHZDUjB3CnY0ajFRUUtCZ1FDdi90V1Z5aUVtb2RmZ2hGRDlPRTNWNUNReEc2V2g2YU1XL0JmaFZjbFY3ZmpPbnRJVEVjelQKeTJTTTVaYnM4L29hWlJ1ckJrVjFNRG9KbGE1RWV1UDVPYmJLdmEzQjhmUjFXOVlkeVI4eEd5R0pFZDBSeVRmYgpNTmdnUk1WbTVkeFhrYkg3eWFBZzFJWktTZEJpNGNCbm9yOFBPS0NNR2I2UExYUjMvMnFaaVE9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQ==",
+            "public_key_encrypt_base64_str": b"LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFvZHpnV1ZaTXRncDc4VkN4dk9lSQprZ2o4eG1KdTkxcm0yZFNpZFdKVElKMkNBZGFSTWVWczNPWWZMZ3gvcGo5dUdWZHlPeFhOcHI2VGpYM2gzcUFECkFyakZTdkRwVlFDWS85RTgwV1NqQUY3VmtFZTA4V2N1QlFPVnlwN2pCc0RrQURqR0hOblhpa1RWdUVHa0FHdjUKdml0OUd0TjZPRGxNKzF3UGtIRWxUK3V1ODVaUitUVTZpYzdIcjVFZ20zcTlwV0VGbWtJTVQ3Q2Q0dlp5bTdjaApzUSt6Y3VYcnF3QmxyN0grNVRyNGtYZDF4VkQrNytGelNaeWNnbU9mNTNqVlBNdnNnVlNQUnpWQTlnSFZxV3FQCnoxUFNrcm9SN0tkZkdpaCthbUxnWFp3dU05UUtJQURGODhvSWFuWEhPckdLbDF6WFUydXRHK2dJb04yZnB1QXQKbVFJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t",
+        }
+
+        keys_base64_str_two = {
+            "private_key_sign_base64_str": b"LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBNGh0YnVWK2cwdWpXZlNITW5BY09WL0pmUE0rS2xub1M2UkxVVXBMaTdoNUtkS1NXCkJFU0w0ZU9qMHJ2V3YvUWpJL1luMkhKd0g2VzhkS1N1OUZqYVpxTWpMT3ZCYWRCaTVBbzVLWnJ5S0lWQUFET0IKTUJxbFpkd0tnbDNuVGNSQlIzdlgzdlBVcE4zWURFZWNYOWdDd3FGc2tkalp1WUFpVENhYXhCSndhOEZnVU1iVAoyK2hyWVYwZTdvNzNTRHlCZU80Q01ZV294TkpPR09lMXZPWFIrNjROSFZhZFBaUHNXMFpIQzY4Wk16dFR5Rm11CmZrcDdsOXZPTWVpTDY0RmJsRWQrUDlabTEzUUhXNFc4OE5vUmpOSFRneEluRlRITS90MHFOL3pwMXowUVI2UksKWXpIeWJqZmZ2TzFHL3FVQ1U1c2t4UjBvMWFoMkkzRUh6U1YySFFJREFRQUJBb0lCQUFvMHhtL29iV08vejFqQQpJeEtDN2dhUndmTkdnZ0MzVzIycVpDdWpCanZONGJvQXFPWGg2emVEMVVRQXB4bXNqVDZGRUxqZ040ZnlMUDdOCjVUalIzdS9sbXNPZkU3Q3hUNWx3RGJML1U4RjQvRkhXQVZXWXlsRDkvUHB6L3lvZk92d2RUcm41WXlhYS9mTFYKODZ6TzNSY0lmdFJaaDhCc0ZJQS8rTm56WkNBMCtXVlAwUk93MjhqcklxeGZjL1N3ZmVVYlhDVURHK1FxSTBkUgpyUUZOdXlvMmFmdzQ2cFJJWU02cTFZRXdlMlQ5VTlIa01lNkxIL1pndkZmQUs3RHVtRlRLUmNPZnNJT245Z2hICjVndTRhbmYrZmM5eFJmZmRTSEQ1ekh1djBUcG1Tak9abWlGL0VXVnJNUzFzWTl4bU5FSkIwNktCMTVNMXkrRC8KbHRyTTZiRUNnWUVBNXYzUVJLTWVBYmEvT2IyVGUyL2xpWVk5UHdnUVBBSHcvT2xUeGI2L0FxL1hmWjAwTThaNwpJQ0sxVzFtRU9hU29EWHRZQkNWaWxJK3BoQXZjT1MwNkNUdDZlcDFLbWZBeEh4VHQ1UDR3SGd5a3dJRjFyMTVkCm1la1MrQmVNcnYxTUo4Q3A5dENXME10d28wWXVFWGxrWkZqdnBxR3kzY0E5Q2Z5SmVzc1NqaEVDZ1lFQStwWXAKc1BNQTd2ODhZWXVUaTVVbDFGblNRSlp6MnBqZEZPcUdXRHFxQy94VEtGdUVFTFFobUZ2OXRJdytWa1IxVGtsZQo0YnQ5TGUyQkNwd0tnczVaanU3a001dC9UaTZ0dms1QitFMTlDeHlUSG5wdW9jMkY5dlpiRzAyOGlyVHgxSEE4ClJSR3c0aDVObVdVeUVDMFdLQjVGMGdINGJKek1HVlRoWUVjV0MwMENnWUJ3M0hDbktKL2ZySCt3WVowdXdaU0EKWmxPRWVaY2RDc0hKZ09PS2lkRmdLYlI3VHBVVCt4VnJ0U214VVlLV2U0b1UxRUJEL2xRMVRDQkNRVjAvbm9adAp2bDd3aSt2SVhTQlRGSEhMNGhwMmhDejNWZ20vUHJjekhUdEVkcFVwWnQrUHlNWUNyeFlSUEdWemtUV3ZHZ1hnCk5jZ2FQWVZjYmJJbEwvdW9RSkozVVFLQmdBVWduM2ZFY1NkeXg0eURhNkIyaTlDZGllVFNiMHB3eUUxT1F6TjQKOTlQSTlQYWxjTDFhd2prNDRLY2FHNGh1WEN3ZTZqY2FQQVI5a0o5ajgvOGJNOC90NlhONDRoRDZlWW1rVmtzNwpZcXlnaUE0ZW1UYnNXcXBqL2hjLzd2U3pvU01rck1jSkJxS0oxakttVkhEcVMwTEU0ODdaUlhrTGVFMm9ZL2d4ClhDMGRBb0dCQUlaTTMxK1hNeXljdEhheGVBTkJHSWg2TVEyVDZUQlozVWVnTW5CYngwQTQ3RzZhYlZVL0p5WHcKeDBXa2xzbjVGT291bHErS1ZjdEM4TU5GekpLOHRnS0dSbW9ERjFCSU9XTGJGbGZ6OWxUQ3psNEhoeE9RSzVFZQpXT2tibzYycHdTUU1LcHZFUjFPS2pWaHpVMXZ1dzlkMG9PL1dTZUg5aU9lWGRPYUhxUVVaCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0t",
+            "public_key_sign_base64_str": b"LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUE0aHRidVYrZzB1aldmU0hNbkFjTwpWL0pmUE0rS2xub1M2UkxVVXBMaTdoNUtkS1NXQkVTTDRlT2owcnZXdi9RakkvWW4ySEp3SDZXOGRLU3U5RmphClpxTWpMT3ZCYWRCaTVBbzVLWnJ5S0lWQUFET0JNQnFsWmR3S2dsM25UY1JCUjN2WDN2UFVwTjNZREVlY1g5Z0MKd3FGc2tkalp1WUFpVENhYXhCSndhOEZnVU1iVDIraHJZVjBlN283M1NEeUJlTzRDTVlXb3hOSk9HT2Uxdk9YUgorNjROSFZhZFBaUHNXMFpIQzY4Wk16dFR5Rm11ZmtwN2w5dk9NZWlMNjRGYmxFZCtQOVptMTNRSFc0Vzg4Tm9SCmpOSFRneEluRlRITS90MHFOL3pwMXowUVI2UktZekh5YmpmZnZPMUcvcVVDVTVza3hSMG8xYWgySTNFSHpTVjIKSFFJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t",
+            "private_key_encrypt_base64_str": b"LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBcHNVMnp6OENoNlpQS1JaaWs0UGxUOTgwUUxuc2lEUjgyaTIrUXNXVnFxcG9UU3dOCnNLMmdDV2hxUkxMUFlxOFVqZFl6Zmo3MHVQMVFyQXkwTmx6L3BYMTJPNGRJT2VkeG12NU1tS0YrMGxGd1g1cEsKNGhNbnhVeG5BcUVRTVh0WjlDU3JzWmRCekY4VjBBcFg4UzkzbjJpNnJGZ254bWRQOHpLSUJtZ0orYzRPaitITQpwMytNRHhRa2MvTkEwWmluTmJiekFMQzhZT0Q5SjZUQm45dWdIMncwTlN4RTFLU2hsVDhEdlpyUktia3U3MUxUClRkdjVQYWhML1FHMlJIVytoMTRsYzF2ZEh4ZFg3VXBMeGtjeGluQytCRkdDQXBsR1RFV1h3c0ZzY3dDOExYK2cKOGxybzB3d0Q1aWh1S0lSQ050cEZldVFXcWJqTHgvL0hiN3RBY3dJREFRQUJBb0lCQUJMaVVBT0ZzZ2FrT1dDQQpyV2JnejQyTXk4RHNqTEVicUd1WU5Hd2hMWUpteTJxNXEwOHZTZWptenVtNmlhczJBaERSaVlFcEpkTHd0RHJYCk1XemFlUVJIUWFVWiszNjdDMjB1a0lQVC9hVlpIVzFsN2tiTlBucWozU0k2RkxoVnJHanQ0aGM0OW5WcTZ2QmsKeTNKL0duK05mMTNXbWFKb3ZtL2ViL0t4d3pkckE4M2NydnBheGpaQnRMNVdkSFlYaDAxZ1hqOTF6aTU0aUNkdgorWTU5Ym5uL3dBa1I4bXN5SmYwT2EvYjJGUDVnL3VUUmRBK3l6b0tHSUN6SVZLaW9kclRWQ0pLODhlanNOQXpKCkV1N2xZSkdGalZzZnhySnBlcVJ5QktuNTRaS3FCQm1WVkxUS0FuQkZpRnluWG1ZVjA2TUgvUkQ2MzBrRHUrcnEKeFBmeWwza0NnWUVBdTVqSkt2UUt3ODFEZk9rcmNKaklSS3gydUF1QUlKSndoUkhEK0tZWDA0U0tTbjcvbDc2bgpDVmFtc28zQXBrUXozWEZhUFcyWW50dFZidEJCSElQcmh6Q1FaNzlxT1BjK0ZrSXUwT3NtNG9UNzllU0NZZFY3CkhaU1pablRtTWhwenlKKzZjVWp6UjlUdXU5dUJkb0hFTWVFakh1SWtjUmVxSzJBMEN5OEVFRVVDZ1lFQTQ1UmkKWkIrQ0piMzR0SUxvanNOSXV2UlhDNnN4VDVmNm0xZVcvekE4VEIvY0EwZWx6OGplOUl6MUUvb0FVbzFIVVgrZAphakt1SmN5NVhUSDZlSWc4c0lRSnJxdVQ3UVJxcVRwVlZ5LzZOVk1qZWl4Q0FZQ1BLeG13Z0R1V3U2ZThGUDZ5CmxSekZoV0sxTHRwRFBGR1I4NGowdVZqQ1piaVcyenYrN3JKYzVWY0NnWUJET2tldFN2T29vNkN4M09XaVhqNDIKemc5bGVVbWJZcDlNTU1lb0RlMnY4V21WdE5sbnlmMFdUYVZEaTZVa2NJQ2R0UWQveUF6UHNRNTJ2YzczcHhiNgp4WjZhYjNCanBjYnNOeCtMNHhsMlIrMzdlcjUyelFobjIxNzE1cUt3QmViRVdPbDV1NGpqangxVzJSMFdHUDcwCldSZzY4eFBZSzREaU5vR3dHRk0rZVFLQmdRQ2FjckNYbko2WitLUlo5V0hZeVlXSmc1dXppcG9ybDB2M3N1a0MKQlAxVytHUTdRWnV4T1hTK2FROUdZR3RwbXdIa3VJUGZkOGVpVlo4VE5ZRHozaG01L2RJSVhkOUZnckxVYUlkVQpaWFljVEhFT1VBejNzZ1QzempadndJRWFsOHBZUVVaM1ZoQmk1c3Rwb2F6eHViWWduampmdFBJeFVLWG80WDJ4CkJ4RnVmd0tCZ1FDWEFKSGNLU2l0dzZQc2FodGZlRys5eGdDN2pDaVh6akpVN0xkSFNCRTl6NWovNjRpMzl0bjgKQ0kvSTNzY3FhaHAxZzVvVnlQVVBESmpTdGIxU3Zvazhqdk9rYWw5cWEycm00NFllWkJBVmIrTm5BanI3WmIvTQpqYXNITjVNSys1VGkrdVc3YW1Vb1NESDBaUlNSSUJ0M1VTU1cydXlRUTdHcjZMRUxYOExPbGc9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQ==",
+            "public_key_encrypt_base64_str": b"LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFwc1Uyeno4Q2g2WlBLUlppazRQbApUOTgwUUxuc2lEUjgyaTIrUXNXVnFxcG9UU3dOc0syZ0NXaHFSTExQWXE4VWpkWXpmajcwdVAxUXJBeTBObHovCnBYMTJPNGRJT2VkeG12NU1tS0YrMGxGd1g1cEs0aE1ueFV4bkFxRVFNWHRaOUNTcnNaZEJ6RjhWMEFwWDhTOTMKbjJpNnJGZ254bWRQOHpLSUJtZ0orYzRPaitITXAzK01EeFFrYy9OQTBaaW5OYmJ6QUxDOFlPRDlKNlRCbjl1ZwpIMncwTlN4RTFLU2hsVDhEdlpyUktia3U3MUxUVGR2NVBhaEwvUUcyUkhXK2gxNGxjMXZkSHhkWDdVcEx4a2N4CmluQytCRkdDQXBsR1RFV1h3c0ZzY3dDOExYK2c4bHJvMHd3RDVpaHVLSVJDTnRwRmV1UVdxYmpMeC8vSGI3dEEKY3dJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t",
+        }
+
+        # Генерация тестовых ключей
+
+        await insert_test_data(db, "donntu_test@mail.ru", "modex.modex@mail.ru", keys_base64_str_one)
+        await insert_test_data(db, "modex.modex@mail.ru", "donntu_test@mail.ru", keys_base64_str_two)
+
         # Завершение работы с базой данных
         await db.disconnect()
 
-    import asyncio
     asyncio.run(main())
+
+
 
