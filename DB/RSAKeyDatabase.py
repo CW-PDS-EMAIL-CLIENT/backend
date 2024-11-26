@@ -255,6 +255,29 @@ class RSAKeyDatabase:
 
         raise HTTPException(status_code=404, detail="Для этой почты не было найдено ключей.")
 
+    async def get_last_insert_public_keys_date(self, sender_email, recipient_email):
+        """Возвращает последнюю дату добавления публичного ключа для указанных email адрессов"""
+
+        query = """
+        SELECT 
+            pub.create_date AS last_create_date
+        FROM PublicRSAKeys pub
+        JOIN Emails sender ON pub.current_sender_email_id = sender.id
+        JOIN Emails recipient ON pub.recipient_email_id = recipient.id
+        WHERE 
+            sender.email = :sender_email 
+            AND recipient.email = :recipient_email 
+        ORDER BY pub.create_date DESC
+        LIMIT 1
+        """
+
+        row = await self.database.fetch_one(query, {
+            "sender_email": sender_email,
+            "recipient_email": recipient_email
+        })
+
+        return datetime.fromisoformat(row["last_create_date"]) if row else None
+
     async def get_emails(self):
         """Возвращает список всех email из таблицы Emails."""
         query = "SELECT email FROM Emails"

@@ -4,12 +4,15 @@ import re
 from contextlib import asynccontextmanager
 
 import base64
+from datetime import datetime
 
 import grpc
 import uvicorn
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Optional
+
+from starlette.responses import JSONResponse
 
 from DB.RSAKeyDatabase import RSAKeyDatabase
 from EProtocols.IMAPClient import IMAPClient  # Используем существующий IMAPClient
@@ -417,15 +420,16 @@ async def generate_and_send_keys(to_email: str = Form(...)):
         "public_key_encrypt": base64.b64encode(keys["public_key_encrypt"]).decode()
     }
 
+    current_date = db.get_current_date()
+
     # Формирование тела письма
     email_body_data = {
         "public_key_sign": keys_base64["public_key_sign"],
         "public_key_encrypt": keys_base64["public_key_encrypt"],
+        "create_date":  current_date,
     }
 
     body = json.dumps(email_body_data, ensure_ascii=False)
-
-    current_date = db.get_current_date()
 
     # test_inserts = {
     #     "sender_email": to_email,
@@ -449,7 +453,7 @@ async def generate_and_send_keys(to_email: str = Form(...)):
 
     send_response = await send_email(
         to_email=to_email,
-        subject=f"Public RSA Keys <{current_date}>",
+        subject=f"RSA_PUBLIC_KEYS <{current_date}>",
         body=body,
         from_name="Sender",
         to_name="Recipient",
@@ -567,6 +571,52 @@ async def get_folders():
         return folders
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка сервера: {str(e)}")
+
+class EmailData(BaseModel):
+    sender_email: str
+    recipient_email: str
+    public_key_sign: str
+    public_key_encrypt: str
+    create_date: str
+
+@app.put("/sync-public-keys/")
+async def sync_public_keys(
+    recipient_email: str,
+):
+    try:
+        # Получаем дату последней записи
+        last_date = await db.get_last_insert_public_keys_date(imap_client.email_user, recipient_email)
+        last_date_str = last_date.isoformat() if last_date else "1970-01-01T00:00:00"
+
+        # Запрашиваем письма с ключами в формате JSON
+        emails_data = imap_client.fetch_keys_emails_as_json()
+        if not emails_data:
+            return JSONResponse({"status": "No valid emails found."})
+
+        # Отбираем только новые ключи
+        new_keys = [
+            email_data
+            for email_data in emails_data
+            if datetime.fromisoformat(email_data["create_date"]) > last_date
+        ]
+
+        if not new_keys:
+            return {"status": "No new keys to add."}
+
+        # Добавляем новые ключи в базу данных
+        for key_data in new_keys:
+            await db.insert_public_keys(
+                current_sender_email=imap_client.email_user,
+                recipient_email=recipient_email,
+                public_key_sign=base64.b64decode(key_data["public_key_sign"]),
+                public_key_encrypt=base64.b64decode(key_data["public_key_encrypt"]),
+                create_date=key_data["create_date"]
+            )
+
+        return {"status": "Success", "new_keys_added": len(new_keys)}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

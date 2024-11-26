@@ -1,5 +1,6 @@
 import imaplib
 import email as em
+import json
 import time
 from email.header import decode_header
 import os
@@ -293,6 +294,63 @@ class IMAPClient:
                 return {"error": "Ошибка при получении списка папок."}
         except Exception as e:
             return {"error": f"Ошибка: {str(e)}"}
+
+    def fetch_keys_emails_as_json(self, folder_name="Inbox"):
+        """
+        Ищет письма с темой, содержащей 'RSA_PUBLIC_KEYS', и преобразует их тела в JSON.
+        :param folder_name: Название папки для поиска писем (по умолчанию 'Inbox').
+        :return: Список JSON-объектов, содержащих данные из тела писем.
+        """
+        try:
+            # Проверяем соединение
+            if not self.is_connection_active():
+                print("Соединение потеряно. Переподключение...")
+                self.close_connect()
+                self.open_connect()
+
+            # Переходим в указанную папку
+            status, _ = self.mail.select(folder_name)
+            if status != "OK":
+                raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
+
+            # Ищем письма с темой, содержащей "RSA_PUBLIC_KEYS"
+            status, messages = self.mail.search(None, 'SUBJECT', '"RSA_PUBLIC_KEYS"')
+            if status != "OK":
+                print(f"Ошибка при поиске писем в папке '{folder_name}'.")
+                return []
+
+            email_ids = messages[0].split()
+            parsed_emails = []
+
+            for email_id in email_ids:
+                # Получаем содержимое письма
+                status, msg_data = self.mail.fetch(email_id, "(RFC822)")
+                if status != "OK":
+                    print(f"Ошибка при получении письма с ID {email_id}")
+                    continue
+
+                # Парсим письмо
+                msg = em.message_from_bytes(msg_data[0][1])
+                body = self.get_body(msg)
+
+                # Попробуем преобразовать тело письма в JSON
+                try:
+                    email_data = json.loads(body)
+
+                    # Проверяем наличие всех ключей
+                    required_keys = {"public_key_sign", "public_key_encrypt", "create_date"}
+                    if all(key in email_data for key in required_keys):
+                        parsed_emails.append(email_data)
+                    else:
+                        print(f"Письмо с ID {email_id} не соответствует структуре.")
+                except json.JSONDecodeError:
+                    print(f"Ошибка парсинга JSON в письме с ID {email_id}.")
+
+            return parsed_emails
+
+        except Exception as e:
+            print(f"Ошибка при обработке писем: {e}")
+            return []
 
 if __name__ == '__main__':
     imap_server = "imap.mail.ru"
