@@ -87,6 +87,8 @@ class SendEmailRequest(BaseModel):
 class SendEmailResponse(BaseModel):
     message: str
 
+
+
 # API для авторизации под другим Email
 # Модели данных для смены учетной записи
 class ChangeAccountRequest(BaseModel):
@@ -147,8 +149,6 @@ class SummaryEmailResponse(BaseModel):
     date: str
 
 
-from typing import Optional, List
-from pydantic import BaseModel
 
 
 # Модели данных
