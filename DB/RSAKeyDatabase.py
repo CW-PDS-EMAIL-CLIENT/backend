@@ -5,8 +5,9 @@ from typing import Optional, List, Dict
 
 from databases import Database
 from fastapi import HTTPException
+from sqlalchemy import Exists
 
-from API.models import SummaryEmailResponse
+from Models.models import SummaryEmailResponse
 
 DATABASE_URL = "sqlite:///rsa_keys.db"
 
@@ -74,7 +75,7 @@ class RSAKeyDatabase:
 
         # Создаем таблицу Folders
         await self.database.execute("""
-        CREATE TABLE Folders (
+        CREATE TABLE IF NOT EXISTS Folders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE -- Имя папки
         )
@@ -83,15 +84,15 @@ class RSAKeyDatabase:
         # Создаем таблицу Letters
         await self.database.execute("""
         CREATE TABLE IF NOT EXISTS Letters (
-            id INTEGER NOT NULL, -- Локальный ID письма в папке
-            folder_id INTEGER NOT NULL, -- ID папки
-            sender_id INTEGER NOT NULL, -- Ссылка на отправителя
-            recipient_id INTEGER NOT NULL, -- Ссылка на получателя
-            to TEXT NOT NULL,
+            id INTEGER NOT NULL,
+            folder_id INTEGER NOT NULL,
+            sender_id INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            to_name TEXT NOT NULL,
             subject TEXT NOT NULL,
             date DATETIME NOT NULL,
             body BLOB NOT NULL,
-            PRIMARY KEY (id, folder_id), -- Составной первичный ключ
+            PRIMARY KEY (id, folder_id),
             FOREIGN KEY (folder_id) REFERENCES Folders (id) 
                 ON DELETE CASCADE ON UPDATE CASCADE,
             FOREIGN KEY (sender_id) REFERENCES Emails (id) 
@@ -103,12 +104,13 @@ class RSAKeyDatabase:
 
         # Создаем таблицу Files
         await self.database.execute("""
-        CREATE TABLE Files (
+        CREATE TABLE IF NOT EXISTS Files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            letter_id INTEGER NOT NULL, -- Ссылка на письмо
-            file_name TEXT NOT NULL, -- Имя файла
-            file_data BLOB NOT NULL, -- Данные файла
-            FOREIGN KEY (letter_id) REFERENCES Letters (id) 
+            letter_id INTEGER NOT NULL,
+            folder_id INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            file_data BLOB NOT NULL,
+            FOREIGN KEY (letter_id, folder_id) REFERENCES Letters (id, folder_id) 
                 ON DELETE CASCADE
         )
         """)
@@ -442,14 +444,15 @@ class RSAKeyDatabase:
             folder_name: str,
             sender: str,
             recipient: str,
-            to: str,
+            to_name: str,
             subject: str,
             date: datetime,
             body: bytes,
             attachments: List[Dict[str, bytes]],
-            letter_id: Optional[int] = None,  # Возможность указать ID письма
+            letter_id: int,  # ID письма теперь обязательное
     ):
-        """Добавляет новое письмо в указанную папку."""
+        """Добавляет новое письмо в указанную папку с обязательными параметрами ID письма и папки."""
+
         # Получаем или создаём папку
         folder_query = "SELECT id FROM Folders WHERE name = :name"
         folder = await self.database.fetch_one(folder_query, {"name": folder_name})
@@ -464,23 +467,17 @@ class RSAKeyDatabase:
         sender_id = await self.insert_email(sender)
         recipient_id = await self.insert_email(recipient)
 
-        # Определяем ID письма
-        if letter_id is None:
-            # Если ID не указан, генерируем следующий доступный ID
-            local_id_query = "SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM Letters WHERE folder_id = :folder_id"
-            next_id = await self.database.fetch_one(local_id_query, {"folder_id": folder_id})
-            letter_id = next_id["next_id"]
-
         # Проверяем, нет ли письма с таким ID в папке
         check_query = "SELECT 1 FROM Letters WHERE id = :id AND folder_id = :folder_id"
         existing_letter = await self.database.fetch_one(check_query, {"id": letter_id, "folder_id": folder_id})
         if existing_letter:
-            raise HTTPException(status_code=400, detail="A letter with this ID already exists in the folder.")
+            # raise Exception("A letter with this ID already exists in the folder.")
+            return None
 
         # Добавляем письмо
         insert_letter_query = """
-        INSERT INTO Letters (id, folder_id, sender_id, recipient_id, to, subject, date, body)
-        VALUES (:id, :folder_id, :sender_id, :recipient_id, :to, :subject, :date, :body)
+        INSERT INTO Letters (id, folder_id, sender_id, recipient_id, to_name, subject, date, body)
+        VALUES (:id, :folder_id, :sender_id, :recipient_id, :to_name, :subject, :date, :body)
         """
         await self.database.execute(
             insert_letter_query,
@@ -489,7 +486,7 @@ class RSAKeyDatabase:
                 "folder_id": folder_id,
                 "sender_id": sender_id,
                 "recipient_id": recipient_id,
-                "to": to,
+                "to_name": to_name,
                 "subject": subject,
                 "date": date,
                 "body": body,
@@ -507,14 +504,15 @@ class RSAKeyDatabase:
                     insert_file_query,
                     {
                         "letter_id": letter_id,
-                        "folder_id": folder_id,
+                        "folder_id": folder_id,  # Указываем также folder_id для внешнего ключа
                         "file_name": attachment["filename"],
                         "file_data": attachment["content"],
                     },
                 )
 
     async def get_email_from_db(self, email_id: int, folder_name: str) -> Optional[Dict]:
-        """Получает письмо и вложения из базы данных по ID и имени папки."""
+        """Получает письмо и вложения из базы данных по ID письма и имени папки."""
+        # Получаем ID папки по имени
         folder_query = "SELECT id FROM Folders WHERE name = :folder_name"
         folder = await self.database.fetch_one(folder_query, {"folder_name": folder_name})
         if not folder:
@@ -522,12 +520,13 @@ class RSAKeyDatabase:
 
         folder_id = folder["id"]
 
+        # Получаем письмо из таблицы Letters
         query = """
         SELECT 
             l.id AS email_id,
             e1.email AS sender,
             e2.email AS recipient,
-            l.to,
+            l.to_name,
             l.subject,
             l.date,
             l.body
@@ -540,6 +539,7 @@ class RSAKeyDatabase:
         if not letter:
             return None
 
+        # Получаем вложения из таблицы Files
         attachments_query = """
         SELECT file_name, file_data 
         FROM Files 
@@ -547,10 +547,12 @@ class RSAKeyDatabase:
         """
         attachments = await self.database.fetch_all(attachments_query, {"email_id": email_id, "folder_id": folder_id})
 
+        # Возвращаем результат в виде словаря
         return {
             "id": letter["email_id"],
             "sender": letter["sender"],
-            "to": letter["to"],
+            "recipient": letter["recipient"],
+            "to_name": letter["to_name"],
             "subject": letter["subject"],
             "date": letter["date"],
             "body": letter["body"],

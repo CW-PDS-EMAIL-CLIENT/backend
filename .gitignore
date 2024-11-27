@@ -1,4 +1,6 @@
 rsa_keys.db
 rsa_keys_backup.db
 rsa_keys
+secureemail_pb2.py
+secureemail_pb2_grpc.py
 attachments

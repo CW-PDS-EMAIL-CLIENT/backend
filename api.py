@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse
 from EProtocols.SMTPClient import SMTPClient
 from SecureEmailClient import SecureEmailClient
 
-from models import *
+from Models.models import *
 
 # Использование lifespan для событий старта и остановки
 @asynccontextmanager
@@ -192,12 +192,12 @@ async def export_public_keys():
     file_obj = await db.export_keys_to_file()
 
     # Генерируем временное имя файла
-    temp_dir = "../rsa_keys"
+    temp_dir = "rsa_keys"
     file_name = "exported_public_keys.json"
     os.makedirs(temp_dir, exist_ok=True)
     file_path = os.path.join(temp_dir, file_name)
 
-    # Сохраняем файл на диск (для последующего API-запроса на скачивание)
+    # Сохраняем файл на диск (для последующего Models-запроса на скачивание)
     with open(file_path, "wb") as f:
         f.write(file_obj.read())
 
@@ -240,7 +240,7 @@ def extract_email(sender):
 @app.post("/emails/info/", response_model=FetchEmailInfoResponse)
 async def fetch_email_info(request: FetchEmailInfoRequest):
     """
-    API для получения информации о письме с декодированием Base64 и автоматическим дешифрованием.
+    Models для получения информации о письме с декодированием Base64 и автоматическим дешифрованием.
 
     Args:
         request (FetchEmailInfoRequest): Параметры запроса с ID письма и именем папки.
@@ -273,9 +273,9 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
         else:
             await db.add_letter(
             folder_name=folder_name,
-            sender=email_info["sender"],
+            sender=extract_email(email_info["sender"]),
             recipient=imap_client.email_user,
-            to=email_info["to"],
+            to_name=email_info["to"],
             subject=email_info["subject"],
             date=email_info["date"],
             body=email_info.get("body"),
@@ -362,7 +362,7 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
             decrypted_attachments = [{"filename": att["filename"], "content": att["content"]} for att in encrypted_attachments]
 
         # Сохраняем вложения во временные файлы и обновляем global_attachments
-        attachments_dir = "../attachments"
+        attachments_dir = "attachments"
         os.makedirs(attachments_dir, exist_ok=True)
         for attachment in decrypted_attachments:
             file_path = os.path.join(attachments_dir, attachment["filename"])
@@ -372,7 +372,7 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
 
         # Возвращаем информацию о письме
         return FetchEmailInfoResponse(
-            sender=email_info["sender"],
+            sender=extract_email(email_info["sender"]),
             to=email_info["to"],
             subject=email_info["subject"],
             date=email_info["date"],
@@ -390,7 +390,7 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
 @app.get("/attachments/{filename}")
 async def get_attachment(filename: str):
     """
-    API для загрузки вложения.
+    Models для загрузки вложения.
 
     Args:
         filename (str): Имя файла вложения.
@@ -398,7 +398,7 @@ async def get_attachment(filename: str):
     Returns:
         FileResponse: Файл вложения.
     """
-    file_path = os.path.join("../attachments", filename)
+    file_path = os.path.join("attachments", filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
@@ -549,7 +549,7 @@ async def send_email(
 @app.get("/folders/", response_model=List[dict])
 async def get_folders():
     """
-    API для получения списка папок на IMAP-сервере.
+    Models для получения списка папок на IMAP-сервере.
     """
     try:
         if not imap_client.is_connection_active():

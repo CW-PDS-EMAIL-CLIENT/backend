@@ -97,7 +97,7 @@ def add_SecureEmailServiceServicer_to_server(servicer, server):
     server.add_registered_method_handlers('secureemail.SecureEmailService', rpc_method_handlers)
 
 
- # This class is part of an EXPERIMENTAL API.
+ # This class is part of an EXPERIMENTAL Models.
 class SecureEmailService(object):
     """Missing associated documentation comment in .proto file."""
 

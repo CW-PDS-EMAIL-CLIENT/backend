@@ -8,7 +8,7 @@ class SaveAttachmentsRequest(BaseModel):
 class SaveAttachmentsResponse(BaseModel):
     message: str
 
-# API для отправки писем
+# Models для отправки писем
 class SendEmailRequest(BaseModel):
     to_email: str
     subject: str
@@ -19,7 +19,7 @@ class SendEmailRequest(BaseModel):
     private_key_sign: Optional[str] = None
     public_key_encrypt: Optional[str] = None  # Ключи для шифрования
 
-# API для авторизации под другим Email
+# Models для авторизации под другим Email
 class ChangeAccountRequest(BaseModel):
     email_user: str
     email_pass: str
@@ -51,7 +51,7 @@ class AccountCredentials(BaseModel):
     imap_port: Optional[int] = 993  # Значение по умолчанию
     smtp_port: Optional[int] = 587  # Значение по умолчанию
 
-# API для получения информации о конкретном письме
+# Models для получения информации о конкретном письме
 class FetchEmailInfoRequest(BaseModel):
     email_id: int
     folder_name: Optional[str] = "Inbox"
@@ -67,14 +67,14 @@ class FetchEmailInfoResponse(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-# API для генерации ключей и отправки по почте
+# Models для генерации ключей и отправки по почте
 class KeyGenerationResponse(BaseModel):
     private_key_sign: str
     public_key_sign: str
     private_key_encrypt: str
     public_key_encrypt: str
 
-# API для отправки письма на указанную почту
+# Models для отправки письма на указанную почту
 class SendEmailResponse(BaseModel):
     message: str
 
