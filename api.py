@@ -259,29 +259,29 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
         # Получаем параметры из тела запроса
         email_id = request.email_id
         folder_name = request.folder_name
-        email_info = None
 
-        try:
-            # Получаем информацию о письме
-            email_info = imap_client.fetch_email_info(email_id=str(email_id).encode(), folder_name=folder_name)
-        except Exception as e:
-            print(f"Failed to fetch email info from IMAP: {e}")
-            email_info = None
+        email_info = await db.get_email_from_db(email_id=email_id, folder_name=folder_name)
 
         if not email_info:
-            email_info = await db.get_email_from_db(email_id=email_id, folder_name=folder_name)
-        else:
-            await db.add_letter(
-            folder_name=folder_name,
-            sender=extract_email(email_info["sender"]),
-            recipient=imap_client.email_user,
-            to_name=email_info["to"],
-            subject=email_info["subject"],
-            date=email_info["date"],
-            body=email_info.get("body"),
-            attachments=email_info.get("attachments", []),
-            letter_id=email_id,
-            )
+            try:
+                # Получаем информацию о письме
+                email_info = imap_client.fetch_email_info(email_id=str(email_id).encode(), folder_name=folder_name)
+
+                await db.add_letter(
+                    folder_name=folder_name,
+                    sender=extract_email(email_info["sender"]),
+                    recipient=imap_client.email_user,
+                    to_name=email_info["to"],
+                    subject=email_info["subject"],
+                    date=email_info["date"],
+                    body=email_info.get("body"),
+                    attachments=email_info.get("attachments", []),
+                    letter_id=email_id,
+                )
+
+            except Exception as e:
+                print(f"Failed to fetch email info from IMAP: {e}")
+                email_info = None
 
         if not email_info:
             raise HTTPException(status_code=404, detail="Email not found")

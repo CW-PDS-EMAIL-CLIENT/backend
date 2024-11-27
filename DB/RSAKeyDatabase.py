@@ -552,7 +552,7 @@ class RSAKeyDatabase:
             "id": letter["email_id"],
             "sender": letter["sender"],
             "recipient": letter["recipient"],
-            "to_name": letter["to_name"],
+            "to": letter["to_name"],
             "subject": letter["subject"],
             "date": letter["date"],
             "body": letter["body"],
