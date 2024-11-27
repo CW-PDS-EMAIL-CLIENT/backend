@@ -352,6 +352,35 @@ class IMAPClient:
             print(f"Ошибка при обработке писем: {e}")
             return []
 
+    def delete_email(self, email_id, folder_name="Inbox"):
+        """
+        Удаляет письмо с указанным ID из заданной папки.
+        :param email_id: ID письма, которое нужно удалить.
+        :param folder_name: Название папки (по умолчанию 'Inbox').
+        """
+        try:
+            # Проверяем активность соединения
+            if not self.is_connection_active():
+                print("Соединение потеряно. Переподключение...")
+                self.close_connect()
+                self.open_connect()
+
+            # Переходим в указанную папку
+            status, _ = self.mail.select(folder_name)
+            if status != "OK":
+                raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
+
+            # Помечаем письмо как удаленное
+            status, _ = self.mail.store(email_id, '+FLAGS', '\\Deleted')
+            if status != "OK":
+                raise Exception(f"Не удалось пометить письмо с ID {email_id} для удаления.")
+
+            # Окончательно удаляем письма с флагом \\Deleted
+            self.mail.expunge()
+            print(f"Письмо с ID {email_id} успешно удалено из папки '{folder_name}'.")
+        except Exception as e:
+            print(f"Ошибка при удалении письма с ID {email_id}: {e}")
+
 if __name__ == '__main__':
     imap_server = "imap.mail.ru"
     email_user = "donntu_test@mail.ru"

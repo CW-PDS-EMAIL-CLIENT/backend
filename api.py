@@ -602,5 +602,76 @@ async def sync_public_keys(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/email/move_to_trash")
+async def move_to_trash(
+        email_id: str = Form(...),
+        folder_name: str = Form("Inbox")
+):
+    """
+    Перемещает письмо в корзину в БД и удаляет его с IMAP сервера.
+
+    Args:
+        request (MoveToTrashRequest): Параметры запроса.
+        db (RSAKeyDatabase): Инстанс базы данных.
+        imap_client (IMAPClient): Инстанс IMAP клиента.
+
+    Raises:
+        HTTPException: Если произошла ошибка на этапе перемещения или удаления.
+
+    Returns:
+        dict: Ответ с результатом операции.
+    """
+    trash_folder = "Trash"  # Название папки "Удаленные" в вашей БД
+
+    try:
+
+        # Удаление письма с IMAP-сервера
+        imap_client.delete_email(email_id=email_id, folder_name=folder_name)
+
+        # Перемещение письма в "Trash" в базе данных
+        await db.move_letter(letter_id=email_id, source_folder_name=folder_name, target_folder_name=trash_folder)
+
+        return {"message": f"Письмо с ID {email_id} перемещено в корзину и удалено с сервера."}
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Произошла ошибка: {e}")
+
+
+@app.post("/email/delete_from_trash")
+async def delete_from_trash(
+        email_id: int = Form(...)
+):
+    """
+    Удаляет письмо из корзины окончательно (из БД и IMAP сервера).
+
+    Args:
+        request (DeleteFromTrashRequest): Параметры запроса.
+        db (RSAKeyDatabase): Инстанс базы данных.
+        imap_client (IMAPClient): Инстанс IMAP клиента.
+
+    Raises:
+        HTTPException: Если произошла ошибка на этапе удаления.
+
+    Returns:
+        dict: Ответ с результатом операции.
+    """
+    trash_folder = "Trash"  # Название папки "Корзина" в вашей базе данных
+
+    try:
+
+        # Удаление письма из базы данных
+        await db.delete_letter(letter_id=email_id, folder_name=trash_folder)
+
+        return {"message": f"Письмо с ID {email_id} успешно удалено из корзины."}
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Произошла ошибка: {e}")
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

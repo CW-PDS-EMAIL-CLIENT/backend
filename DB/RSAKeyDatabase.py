@@ -561,6 +561,100 @@ class RSAKeyDatabase:
             ],
         }
 
+    async def add_or_get_folder_id(self, folder_name: str) -> int:
+        """
+        Добавляет папку в таблицу Folders, если её ещё нет, и возвращает её ID.
+        Если папка уже существует, просто возвращает её ID.
+
+        Args:
+            folder_name (str): Название папки.
+
+        Returns:
+            int: ID папки.
+        """
+        query_select = """
+        SELECT id FROM Folders WHERE name = :folder_name
+        """
+        query_insert = """
+        INSERT INTO Folders (name) VALUES (:folder_name)
+        """
+        try:
+            # Проверяем, существует ли папка
+            result = await self.database.fetch_one(query_select, {"folder_name": folder_name})
+            if result:
+                return result["id"]
+
+            # Если папки нет, добавляем её
+            folder_id = await self.database.execute(query_insert, {"folder_name": folder_name})
+
+            return folder_id
+        except Exception as e:
+            raise ValueError(f"Ошибка при добавлении или получении папки '{folder_name}': {e}")
+
+    async def move_letter(self, letter_id: int, source_folder_name: str, target_folder_name: str):
+        """
+        Перемещает указанное письмо из одной папки в другую.
+
+        Args:
+            letter_id (int): ID письма.
+            source_folder_name (str): Имя папки, из которой перемещается письмо.
+            target_folder_name (str): Имя папки, в которую перемещается письмо.
+
+        Raises:
+            ValueError: Если письмо или папка не найдены.
+        """
+        # Получаем ID исходной папки
+        source_folder_id = await self.database.fetch_val(
+            "SELECT id FROM Folders WHERE name = :name",
+            {"name": source_folder_name}
+        )
+        if not source_folder_id:
+            raise ValueError(f"Source folder '{source_folder_name}' does not exist.")
+
+        # Получаем ID целевой папки
+        target_folder_id = await self.add_or_get_folder_id(target_folder_name)
+
+        # Проверяем, что письмо существует в исходной папке
+        letter_exists = await self.database.fetch_val(
+            "SELECT 1 FROM Letters WHERE id = :letter_id AND folder_id = :folder_id",
+            {"letter_id": letter_id, "folder_id": source_folder_id}
+        )
+        if not letter_exists:
+            raise ValueError(f"Letter with ID {letter_id} does not exist in folder '{source_folder_name}'.")
+
+        # Обновляем папку письма
+        await self.database.execute(
+            "UPDATE Letters SET folder_id = :target_folder_id WHERE id = :letter_id AND folder_id = :source_folder_id",
+            {"target_folder_id": target_folder_id, "letter_id": letter_id, "source_folder_id": source_folder_id}
+        )
+
+    async def delete_letter(self, letter_id: int, folder_name: str):
+        """
+        Удаляет указанное письмо из указанной папки.
+
+        Args:
+            letter_id (int): ID письма.
+            folder_name (str): Имя папки.
+
+        Raises:
+            ValueError: Если письмо или папка не найдены.
+        """
+        # Получаем ID папки
+        folder_id = await self.database.fetch_val(
+            "SELECT id FROM Folders WHERE name = :name",
+            {"name": folder_name}
+        )
+        if not folder_id:
+            raise ValueError(f"Folder '{folder_name}' does not exist.")
+
+        # Удаляем письмо
+        result = await self.database.execute(
+            "DELETE FROM Letters WHERE id = :letter_id AND folder_id = :folder_id",
+            {"letter_id": letter_id, "folder_id": folder_id}
+        )
+        if result == 0:
+            raise ValueError(f"Letter with ID {letter_id} does not exist in folder '{folder_name}'.")
+
     async def get_emails_summary_from_db(self, folder_name: str, offset: int, limit: int) -> List[SummaryEmailResponse]:
         """
         Возвращает список краткой информации о письмах из указанной папки.
