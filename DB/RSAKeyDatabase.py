@@ -6,7 +6,7 @@ from typing import Optional, List, Dict
 from databases import Database
 from fastapi import HTTPException
 
-from API.api import SummaryEmailResponse
+from API.models import SummaryEmailResponse
 
 DATABASE_URL = "sqlite:///rsa_keys.db"
 

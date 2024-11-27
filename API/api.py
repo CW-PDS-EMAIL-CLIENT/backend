@@ -23,6 +23,8 @@ from fastapi.responses import FileResponse
 from EProtocols.SMTPClient import SMTPClient
 from SecureEmailClient import SecureEmailClient
 
+from models import *
+
 # Использование lifespan для событий старта и остановки
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -70,33 +72,6 @@ smtp_client = SMTPClient("smtp.mail.ru", "donntu_test@mail.ru", "wrixCgaMYsqXWmV
 
 db = RSAKeyDatabase()
 
-class SaveAttachmentsRequest(BaseModel):
-    save_path: str
-
-class SaveAttachmentsResponse(BaseModel):
-    message: str
-
-# API для отправки писем
-# Модели данных
-class SendEmailRequest(BaseModel):
-    to_email: str
-    subject: str
-    body: str
-    from_name: Optional[str] = None
-    to_name: Optional[str] = None
-    attachments: Optional[List[UploadFile]] = File(None)  # Используем UploadFile для загрузки файлов
-    private_key_sign: Optional[str] = None
-    public_key_encrypt: Optional[str] = None  # Ключи для шифрования
-
-# API для авторизации под другим Email
-# Модели данных для смены учетной записи
-class ChangeAccountRequest(BaseModel):
-    email_user: str
-    email_pass: str
-    imap_server: Optional[str] = None
-    smtp_server: Optional[str] = None
-    port: Optional[int] = None
-
 @app.post("/change_imap_account/")
 async def change_imap_account(request: ChangeAccountRequest):
     try:
@@ -139,33 +114,6 @@ async def current_smtp_account():
         "port": smtp_client.port
     }
 
-# API для получения списка писем
-# Определение моделей данных
-class SummaryEmailResponse(BaseModel):
-    id: int
-    sender: str
-    subject: str
-    date: str
-
-# Модели данных
-class FetchEmailsRequest(BaseModel):
-    folder_name: Optional[str] = "Inbox"
-    offset: Optional[int] = None
-    limit: Optional[int] = None
-
-
-class SummaryEmailResponse(BaseModel):
-    id: int
-    sender: str
-    subject: str
-    date: str
-
-
-class FetchEmailsResponse(BaseModel):
-    emailsList: List[SummaryEmailResponse]
-
-
-# Изменённый API
 @app.post("/emails/", response_model=FetchEmailsResponse)
 async def fetch_emails(request: FetchEmailsRequest):
     """
@@ -182,30 +130,30 @@ async def fetch_emails(request: FetchEmailsRequest):
     offset = request.offset
     limit = request.limit
 
-    # Вызываем функцию для получения писем
-    emails = imap_client.fetch_emails(folder_name=folder_name, start=offset, limit=limit)
+    try:
+        # Пытаемся получить письма из IMAP
+        emails = imap_client.fetch_emails(folder_name=folder_name, start=offset, limit=limit)
+    except Exception as e:
+        print(f"Failed to fetch emails from IMAP for folder {folder_name}: {e}")
+        emails = None
 
-    # Формируем список писем
-    emails_list = [
-        SummaryEmailResponse(
-            id=email["id"],
-            sender=email["sender"],
-            subject=email["subject"],
-            date=email["date"]
-        ) for email in emails
-    ]
+    if emails:
+        # Формируем список из IMAP
+        emails_list = [
+            SummaryEmailResponse(
+                id=email["id"],
+                sender=email["sender"],
+                subject=email["subject"],
+                date=email["date"]
+            )
+            for email in emails
+        ]
+    else:
+        # Получаем данные из базы
+        emails_list = await db.get_emails_summary_from_db(folder_name=folder_name, offset=offset, limit=limit)
 
     # Возвращаем результат
     return FetchEmailsResponse(emailsList=emails_list)
-
-# Модели данных для авторизации
-class AccountCredentials(BaseModel):
-    email_user: str
-    email_pass: str
-    imap_server: Optional[str] = "imap.mail.ru"  # Значение по умолчанию
-    smtp_server: Optional[str] = "smtp.mail.ru"  # Значение по умолчанию
-    imap_port: Optional[int] = 993  # Значение по умолчанию
-    smtp_port: Optional[int] = 587  # Значение по умолчанию
 
 @app.post("/authorize_account/")
 async def authorize_account(credentials: AccountCredentials):
@@ -244,7 +192,7 @@ async def export_public_keys():
     file_obj = await db.export_keys_to_file()
 
     # Генерируем временное имя файла
-    temp_dir = "rsa_keys"
+    temp_dir = "../rsa_keys"
     file_name = "exported_public_keys.json"
     os.makedirs(temp_dir, exist_ok=True)
     file_path = os.path.join(temp_dir, file_name)
@@ -289,22 +237,6 @@ def extract_email(sender):
     else:
         return None
 
-# API для получения информации о конкретном письме
-class FetchEmailInfoRequest(BaseModel):
-    email_id: int
-    folder_name: Optional[str] = "Inbox"
-
-class FetchEmailInfoResponse(BaseModel):
-    sender: str
-    to: str
-    subject: str
-    date: str
-    body: str
-    attachments: Optional[List[str]] = None
-
-    class Config:
-        arbitrary_types_allowed = True
-
 @app.post("/emails/info/", response_model=FetchEmailInfoResponse)
 async def fetch_email_info(request: FetchEmailInfoRequest):
     """
@@ -327,14 +259,36 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
         # Получаем параметры из тела запроса
         email_id = request.email_id
         folder_name = request.folder_name
+        email_info = None
 
-        # Получаем информацию о письме
-        email_info = imap_client.fetch_email_info(email_id=str(email_id).encode(), folder_name=folder_name)
+        try:
+            # Получаем информацию о письме
+            email_info = imap_client.fetch_email_info(email_id=str(email_id).encode(), folder_name=folder_name)
+        except Exception as e:
+            print(f"Failed to fetch email info from IMAP: {e}")
+            email_info = None
+
+        if not email_info:
+            email_info = await db.get_email_from_db(email_id=email_id, folder_name=folder_name)
+        else:
+            await db.add_letter(
+            folder_name=folder_name,
+            sender=email_info["sender"],
+            recipient=imap_client.email_user,
+            to=email_info["to"],
+            subject=email_info["subject"],
+            date=email_info["date"],
+            body=email_info.get("body"),
+            attachments=email_info.get("attachments", []),
+            letter_id=email_id,
+            )
+
         if not email_info:
             raise HTTPException(status_code=404, detail="Email not found")
 
         encrypted_body = email_info.get("body")
         encrypted_attachments = email_info.get("attachments", [])
+
         decrypted_body = None
         decrypted_attachments = []
 
@@ -408,7 +362,7 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
             decrypted_attachments = [{"filename": att["filename"], "content": att["content"]} for att in encrypted_attachments]
 
         # Сохраняем вложения во временные файлы и обновляем global_attachments
-        attachments_dir = "attachments"
+        attachments_dir = "../attachments"
         os.makedirs(attachments_dir, exist_ok=True)
         for attachment in decrypted_attachments:
             file_path = os.path.join(attachments_dir, attachment["filename"])
@@ -444,17 +398,10 @@ async def get_attachment(filename: str):
     Returns:
         FileResponse: Файл вложения.
     """
-    file_path = os.path.join("attachments", filename)
+    file_path = os.path.join("../attachments", filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=filename)
-
-# API для генерации ключей и отправки по почте
-class KeyGenerationResponse(BaseModel):
-    private_key_sign: str
-    public_key_sign: str
-    private_key_encrypt: str
-    public_key_encrypt: str
 
 @app.post("/generate-keys/")
 async def generate_and_send_keys(to_email: str = Form(...)):
@@ -510,9 +457,6 @@ async def generate_and_send_keys(to_email: str = Form(...)):
     # Возврат успешного ответа
     return {"message": "Keys generated and email sent successfully", "email_status": send_response}
 
-# API для отправки письма на указанную почту
-class SendEmailResponse(BaseModel):
-    message: str
 @app.post("/emails/sent/", response_model=SendEmailResponse)
 async def send_email(
     to_email: str = Form(...),
@@ -618,13 +562,6 @@ async def get_folders():
         return folders
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка сервера: {str(e)}")
-
-class EmailData(BaseModel):
-    sender_email: str
-    recipient_email: str
-    public_key_sign: str
-    public_key_encrypt: str
-    create_date: str
 
 @app.put("/sync-public-keys/")
 async def sync_public_keys(
