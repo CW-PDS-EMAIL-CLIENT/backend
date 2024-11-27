@@ -265,7 +265,7 @@ async def fetch_email_info(request: FetchEmailInfoRequest):
         if not email_info:
             try:
                 # Получаем информацию о письме
-                email_info = imap_client.fetch_email_info(email_id=str(email_id).encode(), folder_name=folder_name)
+                email_info = imap_client.fetch_email_info(email_uid=str(email_id).encode(), folder_name=folder_name)
 
                 await db.add_letter(
                     folder_name=folder_name,
@@ -627,7 +627,7 @@ async def move_to_trash(
     try:
 
         # Удаление письма с IMAP-сервера
-        imap_client.delete_email(email_id=email_id, folder_name=folder_name)
+        imap_client.delete_email(email_uid=email_id, folder_name=folder_name)
 
         # Перемещение письма в "Trash" в базе данных
         await db.move_letter(letter_id=email_id, source_folder_name=folder_name, target_folder_name=trash_folder)

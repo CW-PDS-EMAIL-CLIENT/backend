@@ -70,62 +70,51 @@ class IMAPClient:
             return False
 
     def fetch_emails(self, folder_name="Inbox", start=None, limit=None):
-        """
-        Получает список писем из указанной папки.
-        :param folder_name: Название папки (по умолчанию 'Inbox').
-        :param start: Индекс первого письма (опционально).
-        :param limit: Максимальное количество писем для получения (опционально).
-        :return: Список писем в формате [{"id": ID, "sender": Отправитель, "subject": Тема, "date": Дата}, ...].
-        """
+        """Получает список писем из указанной папки."""
         try:
-            # Проверяем соединение
             if not self.is_connection_active():
                 print("Соединение потеряно. Переподключение...")
                 self.close_connect()
                 self.open_connect()
 
-            # Переходим в указанную папку
             status, _ = self.mail.select(folder_name)
             if status != "OK":
                 raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
 
-            # Ищем все письма
-            status, messages = self.mail.search(None, "ALL")
+            # Получаем UID всех писем
+            status, messages = self.mail.uid("SEARCH", None, "ALL")
             if status != "OK":
                 print(f"Ошибка при поиске писем в папке '{folder_name}'.")
                 return []
 
-            # Получаем список ID писем
-            email_ids = messages[0].split()
+            email_uids = messages[0].split()
 
-            # Если указано ограничение, обрезаем список
             if start:
-                email_ids = email_ids[start:]
+                email_uids = email_uids[start:]
 
             if limit:
-                email_ids = email_ids[:limit]
+                email_uids = email_uids[:limit]
 
             emails = []
-            for email_id in reversed(email_ids):
-                # Получаем содержимое письма
-                status, msg_data = self.mail.fetch(email_id, "(RFC822)")
-                if status != "OK":
-                    print(f"Ошибка при получении письма с ID {email_id}")
+            for email_uid in reversed(email_uids):
+                status, msg_data = self.mail.uid("FETCH", email_uid, "(RFC822)")
+                if status != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+                    print(f"Ошибка при получении письма с UID {email_uid}")
                     continue
 
-                # Парсим письмо
                 msg = em.message_from_bytes(msg_data[0][1])
-
-                # Декодируем заголовок
                 subject = self.decode_mime_words(msg["Subject"])
-
-                # Декодируем отправителя
                 from_ = self.decode_mime_words(msg["From"])
                 date = msg.get("Date")
 
-                emails.append({"id": email_id, "sender": from_, "subject": subject, "date": date})
+                emails.append({
+                    "id": email_uid.decode(),  # UID письма
+                    "sender": from_,
+                    "subject": subject,
+                    "date": date,
+                })
 
-            return list(reversed(emails))  # Возвращаем письма в хронологическом порядке
+            return list(reversed(emails))
         except Exception as e:
             print(f"Ошибка при получении писем из папки '{folder_name}': {e}")
             return []
@@ -145,27 +134,22 @@ class IMAPClient:
                     })
         return attachments
 
-    def fetch_email_info(self, email_id, folder_name="Inbox"):
-        """Получает полную информацию о письме по его ID, включая вложения."""
+    def fetch_email_info(self, email_uid, folder_name="Inbox"):
+        """Получает информацию о письме по UID."""
         try:
-            # Проверяем состояние соединения
-            if not self.mail.state == 'SELECTED':
-                print("Reconnecting to IMAP server...")
+            if not self.is_connection_active():
+                self.close_connect()
                 self.open_connect()
 
-            # Переходим в указанную папку
             status, _ = self.mail.select(folder_name)
             if status != "OK":
                 raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
 
-            status, msg_data = self.mail.fetch(email_id, "(RFC822)")
-
-            # Проверка статуса и содержимого ответа
+            status, msg_data = self.mail.uid("FETCH", email_uid, "(RFC822)")
             if status != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
-                print(f"Письмо с ID {email_id} не найдено или недоступно.")
+                print(f"Письмо с UID {email_uid} не найдено.")
                 return None
 
-            # Если данные валидны, разбираем письмо
             msg = em.message_from_bytes(msg_data[0][1])
             self.selected_email = msg
 
@@ -177,15 +161,16 @@ class IMAPClient:
             attachments = self.get_attachments(msg)
 
             return {
+                "id": email_uid.decode(),
                 "subject": subject,
                 "sender": from_,
                 "to": to_,
                 "date": date,
                 "body": body,
-                "attachments": attachments
+                "attachments": attachments,
             }
         except Exception as e:
-            print(f"Ошибка при обработке письма с ID {email_id}: {e}")
+            print(f"Ошибка при обработке письма с UID {email_uid}: {e}")
             return None
 
     def get_body(self, msg):
@@ -296,90 +281,69 @@ class IMAPClient:
             return {"error": f"Ошибка: {str(e)}"}
 
     def fetch_keys_emails_as_json(self, folder_name="Inbox"):
-        """
-        Ищет письма с темой, содержащей 'RSA_PUBLIC_KEYS', и преобразует их тела в JSON.
-        :param folder_name: Название папки для поиска писем (по умолчанию 'Inbox').
-        :return: Список JSON-объектов, содержащих данные из тела писем.
-        """
+        """Ищет письма с темой 'RSA_PUBLIC_KEYS' и преобразует тела в JSON."""
         try:
-            # Проверяем соединение
             if not self.is_connection_active():
-                print("Соединение потеряно. Переподключение...")
                 self.close_connect()
                 self.open_connect()
 
-            # Переходим в указанную папку
             status, _ = self.mail.select(folder_name)
             if status != "OK":
                 raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
 
-            # Ищем письма с темой, содержащей "RSA_PUBLIC_KEYS"
-            status, messages = self.mail.search(None, 'SUBJECT', '"RSA_PUBLIC_KEYS"')
+            status, messages = self.mail.uid("SEARCH", None, 'SUBJECT "RSA_PUBLIC_KEYS"')
             if status != "OK":
                 print(f"Ошибка при поиске писем в папке '{folder_name}'.")
                 return []
 
-            email_ids = messages[0].split()
+            email_uids = messages[0].split()
             parsed_emails = []
 
-            for email_id in email_ids:
-                # Получаем содержимое письма
-                status, msg_data = self.mail.fetch(email_id, "(RFC822)")
+            for email_uid in email_uids:
+                status, msg_data = self.mail.uid("FETCH", email_uid, "(RFC822)")
                 if status != "OK":
-                    print(f"Ошибка при получении письма с ID {email_id}")
+                    print(f"Ошибка при получении письма с UID {email_uid}")
                     continue
 
-                # Парсим письмо
                 msg = em.message_from_bytes(msg_data[0][1])
                 body = self.get_body(msg)
 
-                # Попробуем преобразовать тело письма в JSON
                 try:
                     email_data = json.loads(body)
-
-                    # Проверяем наличие всех ключей
                     required_keys = {"public_key_sign", "public_key_encrypt", "create_date"}
                     if all(key in email_data for key in required_keys):
                         parsed_emails.append(email_data)
                     else:
-                        print(f"Письмо с ID {email_id} не соответствует структуре.")
+                        print(f"Письмо с UID {email_uid} не соответствует структуре.")
                 except json.JSONDecodeError:
-                    print(f"Ошибка парсинга JSON в письме с ID {email_id}.")
+                    print(f"Ошибка парсинга JSON в письме с UID {email_uid}.")
 
             return parsed_emails
-
         except Exception as e:
-            print(f"Ошибка при обработке писем: {e}")
+            print(f"Ошибка обработки писем: {e}")
             return []
 
-    def delete_email(self, email_id, folder_name="Inbox"):
-        """
-        Удаляет письмо с указанным ID из заданной папки.
-        :param email_id: ID письма, которое нужно удалить.
-        :param folder_name: Название папки (по умолчанию 'Inbox').
-        """
+    def delete_email(self, email_uid, folder_name="Inbox"):
+        """Удаляет письмо по UID."""
         try:
-            # Проверяем активность соединения
             if not self.is_connection_active():
                 print("Соединение потеряно. Переподключение...")
                 self.close_connect()
                 self.open_connect()
 
-            # Переходим в указанную папку
             status, _ = self.mail.select(folder_name)
             if status != "OK":
                 raise Exception(f"Не удалось выбрать папку '{folder_name}'.")
 
             # Помечаем письмо как удаленное
-            status, _ = self.mail.store(email_id, '+FLAGS', '\\Deleted')
+            status, _ = self.mail.uid("STORE", email_uid, '+FLAGS', '\\Deleted')
             if status != "OK":
-                raise Exception(f"Не удалось пометить письмо с ID {email_id} для удаления.")
+                raise Exception(f"Не удалось пометить письмо с UID {email_uid} для удаления.")
 
-            # Окончательно удаляем письма с флагом \\Deleted
-            self.mail.expunge()
-            print(f"Письмо с ID {email_id} успешно удалено из папки '{folder_name}'.")
+            self.mail.expunge()  # Удаляем помеченные письма
+            print(f"Письмо с UID {email_uid} успешно удалено.")
         except Exception as e:
-            print(f"Ошибка при удалении письма с ID {email_id}: {e}")
+            print(f"Ошибка при удалении письма с UID {email_uid}: {e}")
 
 if __name__ == '__main__':
     imap_server = "imap.mail.ru"
