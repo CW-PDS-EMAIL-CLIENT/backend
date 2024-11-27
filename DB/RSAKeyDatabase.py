@@ -5,7 +5,6 @@ from typing import Optional, List, Dict
 
 from databases import Database
 from fastapi import HTTPException
-from sqlalchemy import Exists
 
 from Models.models import SummaryEmailResponse
 
@@ -593,7 +592,8 @@ class RSAKeyDatabase:
 
     async def move_letter(self, letter_id: int, source_folder_name: str, target_folder_name: str):
         """
-        Перемещает указанное письмо из одной папки в другую.
+        Перемещает указанное письмо из одной папки в другую, а также перепривязывает все файлы,
+        связанные с этим письмом, в новую папку.
 
         Args:
             letter_id (int): ID письма.
@@ -604,10 +604,7 @@ class RSAKeyDatabase:
             ValueError: Если письмо или папка не найдены.
         """
         # Получаем ID исходной папки
-        source_folder_id = await self.database.fetch_val(
-            "SELECT id FROM Folders WHERE name = :name",
-            {"name": source_folder_name}
-        )
+        source_folder_id = await self.add_or_get_folder_id(source_folder_name)
         if not source_folder_id:
             raise ValueError(f"Source folder '{source_folder_name}' does not exist.")
 
@@ -622,7 +619,13 @@ class RSAKeyDatabase:
         if not letter_exists:
             raise ValueError(f"Letter with ID {letter_id} does not exist in folder '{source_folder_name}'.")
 
-        # Обновляем папку письма
+        # Получаем все файлы, связанные с этим письмом в исходной папке
+        await self.database.execute(
+            "UPDATE Files SET folder_id = :target_folder_id WHERE letter_id = :letter_id AND folder_id = :source_folder_id",
+            {"target_folder_id": target_folder_id, "letter_id": letter_id, "source_folder_id": source_folder_id}
+        )
+
+        # Обновляем папку для письма
         await self.database.execute(
             "UPDATE Letters SET folder_id = :target_folder_id WHERE id = :letter_id AND folder_id = :source_folder_id",
             {"target_folder_id": target_folder_id, "letter_id": letter_id, "source_folder_id": source_folder_id}
@@ -630,7 +633,7 @@ class RSAKeyDatabase:
 
     async def delete_letter(self, letter_id: int, folder_name: str):
         """
-        Удаляет указанное письмо из указанной папки.
+        Удаляет указанное письмо из указанной папки, а также все вложения, связанные с этим письмом.
 
         Args:
             letter_id (int): ID письма.
@@ -647,7 +650,13 @@ class RSAKeyDatabase:
         if not folder_id:
             raise ValueError(f"Folder '{folder_name}' does not exist.")
 
-        # Удаляем письмо
+        # Удаляем все файлы, связанные с письмом в указанной папке
+        await self.database.execute(
+            "DELETE FROM Files WHERE letter_id = :letter_id AND folder_id = :folder_id",
+            {"letter_id": letter_id, "folder_id": folder_id}
+        )
+
+        # Удаляем письмо из папки
         result = await self.database.execute(
             "DELETE FROM Letters WHERE id = :letter_id AND folder_id = :folder_id",
             {"letter_id": letter_id, "folder_id": folder_id}
@@ -655,14 +664,16 @@ class RSAKeyDatabase:
         if result == 0:
             raise ValueError(f"Letter with ID {letter_id} does not exist in folder '{folder_name}'.")
 
-    async def get_emails_summary_from_db(self, folder_name: str, offset: int, limit: int) -> List[SummaryEmailResponse]:
+    async def get_emails_summary_from_db(
+            self, folder_name: str, offset: Optional[int] = None, limit: Optional[int] = None
+    ) -> List[SummaryEmailResponse]:
         """
         Возвращает список краткой информации о письмах из указанной папки.
 
         Args:
             folder_name (str): Имя папки.
-            offset (int): Смещение для пагинации.
-            limit (int): Лимит количества возвращаемых писем.
+            offset (Optional[int]): Смещение для пагинации (по умолчанию None).
+            limit (Optional[int]): Лимит количества возвращаемых писем (по умолчанию None).
 
         Returns:
             List[SummaryEmailResponse]: Список писем.
@@ -678,10 +689,23 @@ class RSAKeyDatabase:
         INNER JOIN Emails e ON l.sender_id = e.id
         WHERE f.name = :folder_name
         ORDER BY l.date DESC
-        LIMIT :limit OFFSET :offset
         """
-        rows = await self.database.fetch_all(query,
-                                             values={"folder_name": folder_name, "offset": offset, "limit": limit})
+
+        # Дополняем запрос LIMIT и OFFSET только если они указаны
+        if limit is not None:
+            query += " LIMIT :limit"
+        if offset is not None:
+            query += " OFFSET :offset"
+
+        # Подготовка параметров запроса
+        values = {"folder_name": folder_name}
+        if limit is not None:
+            values["limit"] = limit
+        if offset is not None:
+            values["offset"] = offset
+
+        # Выполняем запрос
+        rows = await self.database.fetch_all(query, values)
 
         # Формируем список SummaryEmailResponse
         return [

@@ -625,6 +625,12 @@ async def move_to_trash(
     trash_folder = "Trash"  # Название папки "Удаленные" в вашей БД
 
     try:
+        await fetch_email_info(
+            FetchEmailInfoRequest(
+                email_id=email_id,
+                folder_name=folder_name,
+            )
+        )
 
         # Удаление письма с IMAP-сервера
         imap_client.delete_email(email_uid=email_id, folder_name=folder_name)
