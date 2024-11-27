@@ -1,10 +1,12 @@
 import io
 import json
 from datetime import datetime
-from io import BytesIO
+from typing import Optional, List, Dict
 
 from databases import Database
 from fastapi import HTTPException
+
+from API.api import SummaryEmailResponse
 
 DATABASE_URL = "sqlite:///rsa_keys.db"
 
@@ -67,6 +69,47 @@ class RSAKeyDatabase:
             FOREIGN KEY (recipient_email_id) REFERENCES Emails (id) 
                 ON DELETE CASCADE 
                 ON UPDATE CASCADE
+        )
+        """)
+
+        # Создаем таблицу Folders
+        await self.database.execute("""
+        CREATE TABLE Folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE -- Имя папки
+        )
+        """)
+
+        # Создаем таблицу Letters
+        await self.database.execute("""
+        CREATE TABLE IF NOT EXISTS Letters (
+            id INTEGER NOT NULL, -- Локальный ID письма в папке
+            folder_id INTEGER NOT NULL, -- ID папки
+            sender_id INTEGER NOT NULL, -- Ссылка на отправителя
+            recipient_id INTEGER NOT NULL, -- Ссылка на получателя
+            to TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            date DATETIME NOT NULL,
+            body BLOB NOT NULL,
+            PRIMARY KEY (id, folder_id), -- Составной первичный ключ
+            FOREIGN KEY (folder_id) REFERENCES Folders (id) 
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (sender_id) REFERENCES Emails (id) 
+                ON DELETE CASCADE ON UPDATE CASCADE,
+            FOREIGN KEY (recipient_id) REFERENCES Emails (id) 
+                ON DELETE CASCADE ON UPDATE CASCADE
+        )
+        """)
+
+        # Создаем таблицу Files
+        await self.database.execute("""
+        CREATE TABLE Files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            letter_id INTEGER NOT NULL, -- Ссылка на письмо
+            file_name TEXT NOT NULL, -- Имя файла
+            file_data BLOB NOT NULL, -- Данные файла
+            FOREIGN KEY (letter_id) REFERENCES Letters (id) 
+                ON DELETE CASCADE
         )
         """)
 
@@ -394,6 +437,166 @@ class RSAKeyDatabase:
 
         return f"Импортировано {added_public_count} публичных ключей и {added_private_count} приватных ключей."
 
+    async def add_letter(
+            self,
+            folder_name: str,
+            sender: str,
+            recipient: str,
+            to: str,
+            subject: str,
+            date: datetime,
+            body: bytes,
+            attachments: List[Dict[str, bytes]],
+            letter_id: Optional[int] = None,  # Возможность указать ID письма
+    ):
+        """Добавляет новое письмо в указанную папку."""
+        # Получаем или создаём папку
+        folder_query = "SELECT id FROM Folders WHERE name = :name"
+        folder = await self.database.fetch_one(folder_query, {"name": folder_name})
+        if not folder:
+            folder_insert = "INSERT INTO Folders (name) VALUES (:name)"
+            await self.database.execute(folder_insert, {"name": folder_name})
+            folder = await self.database.fetch_one(folder_query, {"name": folder_name})
+
+        folder_id = folder["id"]
+
+        # Получаем ID отправителя и получателя
+        sender_id = await self.insert_email(sender)
+        recipient_id = await self.insert_email(recipient)
+
+        # Определяем ID письма
+        if letter_id is None:
+            # Если ID не указан, генерируем следующий доступный ID
+            local_id_query = "SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM Letters WHERE folder_id = :folder_id"
+            next_id = await self.database.fetch_one(local_id_query, {"folder_id": folder_id})
+            letter_id = next_id["next_id"]
+
+        # Проверяем, нет ли письма с таким ID в папке
+        check_query = "SELECT 1 FROM Letters WHERE id = :id AND folder_id = :folder_id"
+        existing_letter = await self.database.fetch_one(check_query, {"id": letter_id, "folder_id": folder_id})
+        if existing_letter:
+            raise HTTPException(status_code=400, detail="A letter with this ID already exists in the folder.")
+
+        # Добавляем письмо
+        insert_letter_query = """
+        INSERT INTO Letters (id, folder_id, sender_id, recipient_id, to, subject, date, body)
+        VALUES (:id, :folder_id, :sender_id, :recipient_id, :to, :subject, :date, :body)
+        """
+        await self.database.execute(
+            insert_letter_query,
+            {
+                "id": letter_id,
+                "folder_id": folder_id,
+                "sender_id": sender_id,
+                "recipient_id": recipient_id,
+                "to": to,
+                "subject": subject,
+                "date": date,
+                "body": body,
+            },
+        )
+
+        # Добавляем вложения
+        if attachments:
+            insert_file_query = """
+            INSERT INTO Files (letter_id, folder_id, file_name, file_data)
+            VALUES (:letter_id, :folder_id, :file_name, :file_data)
+            """
+            for attachment in attachments:
+                await self.database.execute(
+                    insert_file_query,
+                    {
+                        "letter_id": letter_id,
+                        "folder_id": folder_id,
+                        "file_name": attachment["filename"],
+                        "file_data": attachment["content"],
+                    },
+                )
+
+    async def get_email_from_db(self, email_id: int, folder_name: str) -> Optional[Dict]:
+        """Получает письмо и вложения из базы данных по ID и имени папки."""
+        folder_query = "SELECT id FROM Folders WHERE name = :folder_name"
+        folder = await self.database.fetch_one(folder_query, {"folder_name": folder_name})
+        if not folder:
+            return None
+
+        folder_id = folder["id"]
+
+        query = """
+        SELECT 
+            l.id AS email_id,
+            e1.email AS sender,
+            e2.email AS recipient,
+            l.to,
+            l.subject,
+            l.date,
+            l.body
+        FROM Letters l
+        JOIN Emails e1 ON l.sender_id = e1.id
+        JOIN Emails e2 ON l.recipient_id = e2.id
+        WHERE l.id = :email_id AND l.folder_id = :folder_id
+        """
+        letter = await self.database.fetch_one(query, {"email_id": email_id, "folder_id": folder_id})
+        if not letter:
+            return None
+
+        attachments_query = """
+        SELECT file_name, file_data 
+        FROM Files 
+        WHERE letter_id = :email_id AND folder_id = :folder_id
+        """
+        attachments = await self.database.fetch_all(attachments_query, {"email_id": email_id, "folder_id": folder_id})
+
+        return {
+            "id": letter["email_id"],
+            "sender": letter["sender"],
+            "to": letter["to"],
+            "subject": letter["subject"],
+            "date": letter["date"],
+            "body": letter["body"],
+            "attachments": [
+                {"filename": attachment["file_name"], "content": attachment["file_data"]} for attachment in attachments
+            ],
+        }
+
+    async def get_emails_summary_from_db(self, folder_name: str, offset: int, limit: int) -> List[SummaryEmailResponse]:
+        """
+        Возвращает список краткой информации о письмах из указанной папки.
+
+        Args:
+            folder_name (str): Имя папки.
+            offset (int): Смещение для пагинации.
+            limit (int): Лимит количества возвращаемых писем.
+
+        Returns:
+            List[SummaryEmailResponse]: Список писем.
+        """
+        query = """
+        SELECT 
+            l.id AS letter_id,
+            e.email AS sender_email,
+            l.subject,
+            l.date
+        FROM Letters l
+        INNER JOIN Folders f ON l.folder_id = f.id
+        INNER JOIN Emails e ON l.sender_id = e.id
+        WHERE f.name = :folder_name
+        ORDER BY l.date DESC
+        LIMIT :limit OFFSET :offset
+        """
+        rows = await self.database.fetch_all(query,
+                                             values={"folder_name": folder_name, "offset": offset, "limit": limit})
+
+        # Формируем список SummaryEmailResponse
+        return [
+            SummaryEmailResponse(
+                id=row["letter_id"],
+                sender=row["sender_email"],
+                subject=row["subject"],
+                date=row["date"].strftime("%Y-%m-%d %H:%M:%S") if isinstance(row["date"], datetime) else row["date"]
+            )
+            for row in rows
+        ]
 
 if __name__ == "__main__":
 
@@ -421,7 +624,7 @@ if __name__ == "__main__":
         )
         print(f"Приватные ключи добавлены с ID: {private_keys_id}")
 
-        # Вставка публичных ключей
+        # Вставка публичн   ых ключей
         public_keys_id = await db.insert_public_keys(
             current_sender_email=sender_email,
             recipient_email=recipient_email,
