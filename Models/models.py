@@ -80,13 +80,6 @@ class KeyGenerationResponse(BaseModel):
 class SendEmailResponse(BaseModel):
     message: str
 
-    class EmailData(BaseModel):
-        sender_email: str
-        recipient_email: str
-        public_key_sign: str
-        public_key_encrypt: str
-        create_date: str
-
 class KeyDatesResponse(BaseModel):
     related_email: str
     last_public_key_date: Optional[datetime] = None
