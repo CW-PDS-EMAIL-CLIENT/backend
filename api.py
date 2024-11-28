@@ -603,11 +603,8 @@ async def sync_public_keys(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/email/move_to_trash")
-async def move_to_trash(
-        email_id: str = Form(...),
-        folder_name: str = Form("Inbox")
-):
+@app.post("/email/move_to_trash_or_delete", response_model=MoveToTrashResponse)
+async def move_to_trash(request: MoveToTrashResponse):
     """
     Перемещает письмо в корзину в БД и удаляет его с IMAP сервера.
 
@@ -624,6 +621,9 @@ async def move_to_trash(
     """
     trash_folder = "Trash"  # Название папки "Удаленные" в вашей БД
 
+    email_id = request.email_id
+    folder_name = request.folder_name
+
     try:
         await fetch_email_info(
             FetchEmailInfoRequest(
@@ -632,13 +632,21 @@ async def move_to_trash(
             )
         )
 
-        # Удаление письма с IMAP-сервера
-        imap_client.delete_email(email_uid=email_id, folder_name=folder_name)
+        try:
+            # Удаление письма с IMAP-сервера
+            imap_client.delete_email(email_uid=str(email_id), folder_name=folder_name)
+        except Exception as e:
+            print(f"Failed to delete emails from IMAP for folder {folder_name}: {e}")
 
-        # Перемещение письма в "Trash" в базе данных
-        await db.move_letter(letter_id=email_id, source_folder_name=folder_name, target_folder_name=trash_folder)
+        if db.get_folder_by_letter_id(email_id) != trash_folder:
+            # Перемещение письма в "Trash" в базе данных
+            await db.move_letter(letter_id=email_id, source_folder_name=folder_name, target_folder_name=trash_folder)
+            return {"message": f"Письмо с ID {email_id} перемещено в корзину и удалено с сервера."}
+        else:
+            # Удаление письма из базы данных
+            await db.delete_letter(letter_id=email_id, folder_name=trash_folder)
+            return {"message": f"Письмо с ID {email_id} успешно удалено из корзины."}
 
-        return {"message": f"Письмо с ID {email_id} перемещено в корзину и удалено с сервера."}
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

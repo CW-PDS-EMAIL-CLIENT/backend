@@ -84,3 +84,7 @@ class KeyDatesResponse(BaseModel):
     related_email: str
     last_public_key_date: Optional[datetime] = None
     last_private_key_date: Optional[datetime] = None
+
+class MoveToTrashResponse(BaseModel):
+    email_id: int
+    folder_name: str = "Inbox"

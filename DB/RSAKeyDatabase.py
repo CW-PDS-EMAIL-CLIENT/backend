@@ -794,6 +794,24 @@ class RSAKeyDatabase:
 
         return result
 
+    async def get_folder_by_letter_id(self, letter_id: int):
+        """
+        Возвращает название папки для указанного письма по его ID.
+
+        :param letter_id: Идентификатор письма.
+        :return: Название папки или None, если письмо не найдено.
+        """
+        query = """
+        SELECT f.name AS folder_name
+        FROM Letters l
+        JOIN Folders f ON l.folder_id = f.id
+        WHERE l.id = :letter_id
+        """
+
+        row = await self.database.fetch_one(query, {"letter_id": letter_id})
+        return row["folder_name"] if row else None
+
+
 if __name__ == "__main__":
 
     import asyncio
