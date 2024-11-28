@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi import UploadFile
@@ -84,3 +86,8 @@ class SendEmailResponse(BaseModel):
         public_key_sign: str
         public_key_encrypt: str
         create_date: str
+
+class KeyDatesResponse(BaseModel):
+    related_email: str
+    last_public_key_date: Optional[datetime] = None
+    last_private_key_date: Optional[datetime] = None

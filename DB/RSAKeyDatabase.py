@@ -305,7 +305,7 @@ class RSAKeyDatabase:
 
         raise HTTPException(status_code=404, detail="Для этой почты не было найдено ключей.")
 
-    async def get_last_insert_public_keys_date(self, sender_email, recipient_email):
+    async def get_last_insert_public_keys_date(self, current_sender_email, recipient_email):
         """Возвращает последнюю дату добавления публичного ключа для указанных email адрессов"""
 
         query = """
@@ -322,8 +322,31 @@ class RSAKeyDatabase:
         """
 
         row = await self.database.fetch_one(query, {
-            "sender_email": sender_email,
+            "sender_email": current_sender_email,
             "recipient_email": recipient_email
+        })
+
+        return datetime.fromisoformat(row["last_create_date"]) if row else None
+
+    async def get_last_insert_private_keys_date(self, sender_email, current_recipient_email):
+        """Возвращает последнюю дату добавления приватного ключа для указанных email адресов."""
+
+        query = """
+        SELECT 
+            priv.create_date AS last_create_date
+        FROM PrivateRSAKeys priv
+        JOIN Emails sender ON priv.sender_email_id = sender.id
+        JOIN Emails recipient ON priv.current_recipient_email_id = recipient.id
+        WHERE 
+            sender.email = :sender_email 
+            AND recipient.email = :recipient_email 
+        ORDER BY priv.create_date DESC
+        LIMIT 1
+        """
+
+        row = await self.database.fetch_one(query, {
+            "sender_email": sender_email,
+            "recipient_email": current_recipient_email
         })
 
         return datetime.fromisoformat(row["last_create_date"]) if row else None
@@ -717,6 +740,59 @@ class RSAKeyDatabase:
             )
             for row in rows
         ]
+
+    async def get_related_emails_and_dates(self, current_email: str) -> List[Dict]:
+        """Возвращает список всех второстепенных почт и дат для публичных и приватных ключей для текущего email, сортируя по приватным ключам."""
+
+        query = """
+        WITH RecipientEmails AS (
+            SELECT e.id, e.email
+            FROM Emails e
+            WHERE e.email != :current_email
+        ),
+        PrivateKeys AS (
+            SELECT pk.current_recipient_email_id, MAX(pk.create_date) AS last_private_key_update
+            FROM PrivateRSAKeys pk
+            JOIN RecipientEmails re ON pk.current_recipient_email_id = re.id
+            JOIN Emails e ON pk.sender_email_id = e.id
+            WHERE e.email = :current_email
+            GROUP BY pk.current_recipient_email_id
+        ),
+        PublicKeys AS (
+            SELECT pk.recipient_email_id, MAX(pk.create_date) AS last_public_key_update
+            FROM PublicRSAKeys pk
+            JOIN RecipientEmails re ON pk.recipient_email_id = re.id
+            JOIN Emails e ON pk.current_sender_email_id = e.id
+            WHERE e.email = :current_email
+            GROUP BY pk.recipient_email_id
+        )
+        SELECT re.email AS related_email,
+               pk.last_private_key_update,
+               pub.last_public_key_update
+        FROM RecipientEmails re
+        LEFT JOIN PrivateKeys pk ON re.id = pk.current_recipient_email_id
+        LEFT JOIN PublicKeys pub ON re.id = pub.recipient_email_id
+        ORDER BY 
+            CASE 
+                WHEN pk.last_private_key_update IS NULL THEN 1 
+                ELSE 0 
+            END, 
+            pk.last_private_key_update ASC;
+        """
+
+        rows = await self.database.fetch_all(query, {"current_email": current_email})
+
+        result = []
+        for row in rows:
+            result.append({
+                "related_email": row["related_email"],
+                "last_public_key_date": row["last_public_key_update"] if row[
+                                                                             "last_public_key_update"] is not None else None,
+                "last_private_key_date": row["last_private_key_update"] if row[
+                                                                               "last_private_key_update"] is not None else None,
+            })
+
+        return result
 
 if __name__ == "__main__":
 

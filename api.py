@@ -404,7 +404,7 @@ async def get_attachment(filename: str):
     return FileResponse(file_path, filename=filename)
 
 @app.post("/generate-keys/")
-async def generate_and_send_keys(to_email: str = Form(...)):
+async def generate_and_send_keys(sender_email: str = Form(...)):
     # Генерация новых ключей
     keys = secure_email_client.generate_keys()
 
@@ -436,7 +436,7 @@ async def generate_and_send_keys(to_email: str = Form(...)):
     # }
 
     await db.insert_private_keys(
-        sender_email=to_email,
+        sender_email=sender_email,
         current_recipient_email=imap_client.email_user,
         private_key_sign=keys["private_key_sign"],  # Уже байты
         private_key_encrypt=keys["private_key_encrypt"],  # Уже байты
@@ -446,7 +446,7 @@ async def generate_and_send_keys(to_email: str = Form(...)):
     )
 
     send_response = await send_email(
-        to_email=to_email,
+        to_email=sender_email,
         subject=f"RSA_PUBLIC_KEYS <{current_date}>",
         body=body,
         from_name="Sender",
@@ -597,7 +597,7 @@ async def sync_public_keys(
                 create_date=key_data["create_date"]
             )
 
-        return {"status": "Success", "new_keys_added": len(new_keys)}
+        return {"status": f"Success. New keys added {len(new_keys)}"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -677,6 +677,19 @@ async def delete_from_trash(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Произошла ошибка: {e}")
+
+# Эндпоинт для получения списка почт и дат
+@app.get("/keys/related-dates/", response_model=List[KeyDatesResponse])
+async def get_related_emails_and_dates():
+    """Возвращает список связанных email-адресов с последними датами для публичных и приватных ключей."""
+
+    # Получаем данные из функции, которая выполняет запрос к БД
+    related_emails_and_dates = await db.get_related_emails_and_dates(imap_client.email_user)
+
+    if not related_emails_and_dates:
+        raise HTTPException(status_code=404, detail="Не найдены связанные email-адреса.")
+
+    return related_emails_and_dates
 
 
 if __name__ == "__main__":
