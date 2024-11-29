@@ -85,6 +85,6 @@ class KeyDatesResponse(BaseModel):
     last_public_key_date: Optional[datetime] = None
     last_private_key_date: Optional[datetime] = None
 
-class MoveToTrashResponse(BaseModel):
+class MoveToTrashRequest(BaseModel):
     email_id: int
     folder_name: str = "Inbox"

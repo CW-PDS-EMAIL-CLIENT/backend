@@ -603,8 +603,8 @@ async def sync_public_keys(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/email/move_to_trash_or_delete", response_model=MoveToTrashResponse)
-async def move_to_trash(request: MoveToTrashResponse):
+@app.post("/email/move_to_trash_or_delete")
+async def move_to_trash(request: MoveToTrashRequest):
     """
     Перемещает письмо в корзину в БД и удаляет его с IMAP сервера.
 
@@ -638,7 +638,9 @@ async def move_to_trash(request: MoveToTrashResponse):
         except Exception as e:
             print(f"Failed to delete emails from IMAP for folder {folder_name}: {e}")
 
-        if db.get_folder_by_letter_id(email_id) != trash_folder:
+        folder_letter = await db.get_folder_by_letter_id(email_id)
+
+        if folder_letter != trash_folder:
             # Перемещение письма в "Trash" в базе данных
             await db.move_letter(letter_id=email_id, source_folder_name=folder_name, target_folder_name=trash_folder)
             return {"message": f"Письмо с ID {email_id} перемещено в корзину и удалено с сервера."}
