@@ -65,10 +65,10 @@ app.add_middleware(
 )
 
 # Инициализация IMAP-клиента
-imap_client = IMAPClient("imap.mail.ru", "donntu_test@mail.ru", "wrixCgaMYsqXWmVbBPS7")
+imap_client = IMAPClient("imap.mail.ru", "donntu_test@mail.ru", "9P4vtaiQX2754f1Kh32w")
 
 # Инициализация SMTP-клиента
-smtp_client = SMTPClient("smtp.mail.ru", "donntu_test@mail.ru", "wrixCgaMYsqXWmVbBPS7")
+smtp_client = SMTPClient("smtp.mail.ru", "donntu_test@mail.ru", "9P4vtaiQX2754f1Kh32w")
 
 db = RSAKeyDatabase()
 
@@ -570,7 +570,7 @@ async def sync_public_keys(
     try:
         # Получаем дату последней записи
         last_date = await db.get_last_insert_public_keys_date(imap_client.email_user, recipient_email)
-        last_date_str = last_date.isoformat() if last_date else "1970-01-01T00:00:00"
+        last_date = last_date.isoformat() if last_date else datetime.fromisoformat("1970-01-01T00:00:00")
 
         # Запрашиваем письма с ключами в формате JSON
         emails_data = imap_client.fetch_keys_emails_as_json()
